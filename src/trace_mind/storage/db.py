@@ -36,14 +36,22 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE TABLE IF NOT EXISTS transcript_cursors (
-  session_id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
   transcript_path TEXT NOT NULL,
   byte_offset INTEGER NOT NULL DEFAULT 0,
   file_size INTEGER NOT NULL DEFAULT 0,
   leading_hash TEXT,
   parser_version TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (session_id, transcript_path)
 );
+-- One logical session can span multiple physical transcript files (a Codex
+-- compaction rewrites the rollout under a new filename but keeps the same
+-- session_id). The cursor -- and what "truncated" even means -- only makes
+-- sense per physical file: comparing file sizes across two *different*
+-- files for the same session_id is meaningless and, before this schema,
+-- caused a real bug where ingesting a second file for an already-seen
+-- session_id was misread as truncation of the first and deleted its events.
 
 CREATE TABLE IF NOT EXISTS normalized_events (
   id TEXT PRIMARY KEY,
@@ -60,11 +68,19 @@ CREATE TABLE IF NOT EXISTS normalized_events (
   byte_start INTEGER NOT NULL,
   byte_end INTEGER NOT NULL,
   content_hash TEXT NOT NULL,
-  UNIQUE(session_id, byte_start, byte_end, event_index)
+  UNIQUE(transcript_path, byte_start, byte_end, event_index)
 );
+-- Identity is keyed on transcript_path, not session_id: two different
+-- physical files sharing one session_id can coincidentally have the same
+-- byte range (e.g. both start with a similarly-sized header line), and
+-- session_id alone would wrongly treat the second file's event as a
+-- duplicate of the first's and silently drop it.
 
+-- Ordering by (session_id, timestamp) is the only ordering that's valid
+-- across a multi-file session; (byte_start, event_index) alone only orders
+-- correctly *within* one transcript_path.
 CREATE INDEX IF NOT EXISTS idx_normalized_events_session
-  ON normalized_events(session_id, byte_start, event_index);
+  ON normalized_events(session_id, timestamp, transcript_path, byte_start, event_index);
 
 CREATE TABLE IF NOT EXISTS hook_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

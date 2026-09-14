@@ -50,16 +50,20 @@ class NormalizedEvent(BaseModel):
     content_hash: str
 
     @staticmethod
-    def compute_content_hash(session_id: str, byte_start: int, byte_end: int, raw: str) -> str:
-        """Identity for dedup: (session, byte range, raw bytes).
+    def compute_content_hash(transcript_path: str, byte_start: int, byte_end: int, raw: str) -> str:
+        """Identity for dedup: (physical file, byte range, raw bytes).
 
         Keying purely on rendered text would collide two distinct short
-        messages ("yes" said twice); keying on session+byte-range makes the
-        cursor's re-read idempotent while still treating legitimate repeats
-        as separate events.
+        messages ("yes" said twice); keying on transcript_path+byte-range
+        makes the cursor's re-read idempotent while still treating
+        legitimate repeats as separate events. Deliberately keyed on
+        transcript_path, not session_id: one session_id can span multiple
+        physical files (a compaction rewrites the rollout under a new
+        filename), and two different files could coincidentally share a
+        byte range -- session_id alone isn't a safe identity component.
         """
         h = hashlib.sha256()
-        h.update(session_id.encode("utf-8"))
+        h.update(transcript_path.encode("utf-8"))
         h.update(str(byte_start).encode("utf-8"))
         h.update(str(byte_end).encode("utf-8"))
         h.update(raw.encode("utf-8"))

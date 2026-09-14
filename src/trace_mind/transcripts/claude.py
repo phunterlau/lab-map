@@ -183,9 +183,9 @@ def _make(
     # `event_index` is a block index local to this one line (stable
     # regardless of read boundaries); it disambiguates multiple events that
     # share the same byte range, e.g. text + tool_use in one assistant turn.
-    content_hash = NormalizedEvent.compute_content_hash(session_id, byte_start, byte_end, raw + f"#{event_index}")
+    content_hash = NormalizedEvent.compute_content_hash(str(path), byte_start, byte_end, raw + f"#{event_index}")
     return NormalizedEvent(
-        id=f"claude:{session_id}:{content_hash[:16]}",
+        id=f"claude:{content_hash}",
         provider="claude",
         session_id=session_id,
         turn_id=turn_id,

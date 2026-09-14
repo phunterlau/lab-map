@@ -32,9 +32,15 @@ def ingest_session(
     session_id: str,
     transcript_path: Path,
 ) -> IngestResult:
+    # Cursor identity is (session_id, transcript_path), not session_id alone:
+    # one session can span multiple physical files (a compaction rewrites
+    # the rollout under a new filename but keeps the same session_id), and
+    # a brand-new path for an already-seen session_id must start at offset
+    # 0 without disturbing that session's events from its *other* files.
     cursor_row = conn.execute(
-        "SELECT byte_offset, file_size, leading_hash FROM transcript_cursors WHERE session_id = ?",
-        (session_id,),
+        "SELECT byte_offset, file_size, leading_hash FROM transcript_cursors "
+        "WHERE session_id = ? AND transcript_path = ?",
+        (session_id, str(transcript_path)),
     ).fetchone()
 
     byte_offset = cursor_row["byte_offset"] if cursor_row else 0
@@ -43,8 +49,9 @@ def ingest_session(
     if cursor_row is not None:
         current_size = transcript_path.stat().st_size
         if current_size < cursor_row["file_size"]:
-            # File shrank: truncation or rotation. The old byte offset is no
-            # longer meaningful against this file's content, so start over.
+            # This same file, at this same path, shrank since we last read
+            # it: truncation or rewrite. The old byte offset is no longer
+            # meaningful against its content, so start over.
             logger.warning(
                 "transcript %s shrank (%d -> %d bytes); resetting cursor for session %s",
                 transcript_path, cursor_row["file_size"], current_size, session_id,
@@ -75,13 +82,15 @@ def ingest_session(
 
     with conn:
         if rotated:
-            # The old rows' byte ranges belong to a file identity that no
-            # longer exists (truncated/rewritten). Keeping them would leave
-            # phantom evidence in the graph with byte offsets that no
-            # longer point at anything real. Since read_delta above was
-            # re-run from offset 0, deleting and re-inserting is safe and
-            # keeps event insertion + cursor advance in the one transaction.
-            conn.execute("DELETE FROM normalized_events WHERE session_id = ?", (session_id,))
+            # The old rows' byte ranges belong to *this file's* prior
+            # identity, which no longer exists (it was truncated/rewritten).
+            # Keeping them would leave phantom evidence with byte offsets
+            # that no longer point at anything real. Scoped to this
+            # transcript_path only -- this session's events from any other
+            # physical file must not be touched.
+            conn.execute(
+                "DELETE FROM normalized_events WHERE transcript_path = ?", (str(transcript_path),)
+            )
 
         for event in delta.events:
             cur = conn.execute(
@@ -103,8 +112,7 @@ def ingest_session(
                 session_id, transcript_path, byte_offset, file_size, leading_hash,
                 parser_version, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(session_id) DO UPDATE SET
-                transcript_path = excluded.transcript_path,
+            ON CONFLICT(session_id, transcript_path) DO UPDATE SET
                 byte_offset = excluded.byte_offset,
                 file_size = excluded.file_size,
                 leading_hash = excluded.leading_hash,

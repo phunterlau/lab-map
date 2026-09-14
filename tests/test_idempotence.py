@@ -103,6 +103,39 @@ def test_simulated_crash_between_read_and_cursor_advance_does_not_skip_events(db
     assert cursor_row["byte_offset"] == CODEX_FIXTURE.stat().st_size
 
 
+def test_second_file_for_same_session_id_does_not_delete_first_files_events(db, tmp_path):
+    """A Codex compaction rewrites a session's rollout under a NEW filename
+    but keeps the SAME session_id. Ingesting that second, unrelated file
+    must not be mistaken for truncation of the first and must not delete
+    the first file's already-ingested events -- this happened for real
+    against an actual multi-file Codex session and lost 17.8k events.
+    """
+    adapter = CodexTranscriptAdapter()
+    session_id = "01a0aaaa-0000-7000-8000-000000000001"
+
+    first_file = tmp_path / "rollout-a.jsonl"
+    first_file.write_bytes(CODEX_FIXTURE.read_bytes())
+    ingest_session(db, adapter, session_id, first_file)
+    first_file_count = _count_events(db, session_id)
+    assert first_file_count > 0
+
+    # A second, smaller file for the SAME session_id but a DIFFERENT path --
+    # must be treated as new content to read from 0, not as the first file
+    # having shrunk.
+    second_file = tmp_path / "rollout-b-continuation.jsonl"
+    second_file.write_bytes(CODEX_FIXTURE.read_bytes()[:900])  # a few complete lines
+    result = ingest_session(db, adapter, session_id, second_file)
+    assert result.rotated is False
+
+    total_count = _count_events(db, session_id)
+    assert total_count > first_file_count, "first file's events must survive ingesting a second file"
+
+    # Ingesting the first file again afterward is still a pure no-op.
+    result_again = ingest_session(db, adapter, session_id, first_file)
+    assert result_again.new_events == 0
+    assert _count_events(db, session_id) == total_count
+
+
 def test_truncated_transcript_resets_cursor_instead_of_erroring(db, tmp_path):
     adapter = CodexTranscriptAdapter()
     session_id = "01a0aaaa-0000-7000-8000-000000000001"

@@ -187,9 +187,9 @@ def _make(
     session_id, path, byte_start, byte_end, event_index, raw, *,
     event_type, role, text, tool_name, timestamp, turn_id,
 ) -> NormalizedEvent:
-    content_hash = NormalizedEvent.compute_content_hash(session_id, byte_start, byte_end, raw + f"#{event_index}")
+    content_hash = NormalizedEvent.compute_content_hash(str(path), byte_start, byte_end, raw + f"#{event_index}")
     return NormalizedEvent(
-        id=f"codex:{session_id}:{content_hash[:16]}",
+        id=f"codex:{content_hash}",
         provider="codex",
         session_id=session_id,
         turn_id=turn_id,
