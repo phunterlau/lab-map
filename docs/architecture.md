@@ -14,11 +14,13 @@ the graph is interpreted state
 Markdown is the human-readable projection
 ```
 
-## What's built (build plan Milestones 0-4, one vertical slice)
+## What's built (build plan Milestones 0-4 + Codex half of Milestone 2)
 
 Real transcript file -> adapter -> `NormalizedEvent` -> SQLite -> cursor
 advance -> re-run is idempotent -> manual graph (nodes/edges/provenance) ->
 `why <node>` walks decision -> evidence -> source session/turn/bytes.
+Codex hooks call the same `ingest_session()` automatically now; Claude Code
+hooks are not wired yet ("hooks to codex for now").
 
 - `normalize/models.py` -- `NormalizedEvent`, provider-neutral. Nothing
   outside `transcripts/` touches raw Claude/Codex JSON.
@@ -52,8 +54,30 @@ advance -> re-run is idempotent -> manual graph (nodes/edges/provenance) ->
   nonexistent nodes (`UnknownNodeError`). Upserts by node/edge id.
 - `cli.py` -- `trace-mind ingest`, `node add/show`, `edge add`, `why`
   (alias for `node show`: the decision -> evidence -> source-session
-  chain). Hooks and backfill will call the same `ingest_session()`/
-  `graph.repository` functions the CLI calls.
+  chain), `graph export [--png]`, `hook --provider codex`. Backfill will
+  call the same `ingest_session()`/`graph.repository` functions the CLI
+  calls.
+- `hooks/common.py`, `hooks/codex.py` -- the Codex half of Milestone 2.
+  `trace-mind hook --provider codex` reads one hook event as JSON from
+  stdin, logs it to `hook_events`, and opportunistically calls
+  `ingest_session()` if a transcript is already on disk. Field names
+  (`hook_event_name`, `session_id`, `transcript_path` (nullable), `cwd`)
+  come from the real schemas at
+  `reference/codex/codex-rs/hooks/schema/generated/*.command.input.schema.json`,
+  not guessed. Fails open by design: every exception is caught, logged to
+  stderr, and swallowed -- the process always exits 0 with empty stdout
+  (valid per the output schema; every field there is optional). DB path is
+  derived from the hook payload's own `cwd` field
+  (`<cwd>/.trace-mind/research.db`), not this process's cwd, since those
+  can differ depending on how the agent invokes hook commands.
+  `integrations/codex/config.toml.example` has the exact `[hooks]` TOML to
+  add to a project's `.codex/config.toml` (or the global
+  `~/.codex/config.toml` -- not installed automatically either way; that's
+  the user's call, same as the existing note about `~/.claude/settings.json`
+  below).
+- `projection/graphviz_export.py` -- `graph_nodes`/`graph_edges` -> DOT,
+  optionally rendered to PNG via the system `dot` binary (no new Python
+  dependency). Used to visualize the real-session graph below.
 - `tests/fixtures/{claude,codex}/` -- synthetic fixtures, not copied from
   any real session (copying real local transcript content into this repo
   was deliberately refused mid-build as a provenance risk -- see git log).
@@ -93,18 +117,46 @@ the real compaction boundary between the two physical files. This run is
 what surfaced the multi-file cursor bug above. Specifics of that research
 project's content are intentionally not reproduced here.
 
+### Hook latency: measured
+
+Build plan section 11.1 targets p95 < 50ms for the hook enqueue path and
+explicitly calls that "a benchmark, not an assumption" -- measured rather
+than assumed:
+
+```
+echo '<Stop payload>' | .venv/bin/trace-mind hook --provider codex
+```
+
+consistently takes ~110-130ms wall time (direct venv binary, no `uv run`
+overhead). `python3 -X importtime` traced it: `pydantic` (~56ms, via
+`normalize.models`) and `typer` (~24ms) import cost dominate; the actual
+hook logic (stdin parse, one SQLite insert, opportunistic ingest) is a
+small fraction of that. In practice this doesn't cost the user turn
+latency: `Stop` fires once per turn, in a separate process, off the
+critical path -- the 50ms target in section 11.1 is about not blocking the
+agent, which this doesn't. It's still worth recording because it's 2-3x
+the stated benchmark and because a future `UserPromptSubmit` or
+per-tool-call hook (section 11.1's "add later" list) would put this cost
+on a much hotter path. If that happens, the fix is probably a separate,
+minimal-import hook entry point rather than reusing the full Typer app --
+not done now since nothing currently needs it.
+
 ## What's stubbed but not yet implemented
 
-`extraction/`, `provenance/` (only its table exists), `projection/`,
-`recall/`, `mcp/`, `hooks/` are empty packages.
+`extraction/`, `provenance/` (only its table exists), `recall/`, `mcp/`,
+and the Claude Code half of `hooks/` are not built. `projection/` has only
+the Graphviz exporter -- no `RESEARCH_MAP.md` Markdown projection yet.
 
 ## Next steps, in the order the build plan recommends (section 26)
 
-1. Milestone 2: `hooks/` -- `SessionStart`/`Stop`/`PreCompact`/`SessionEnd`
-   entry points for Claude and Codex that enqueue into `hook_events` and
-   call `ingest_session()`. Needs the user's sign-off before touching
+1. Claude Code half of Milestone 2 (`hooks/claude.py` + `trace-mind hook
+   --provider claude`) -- same pattern as `hooks/codex.py`, different
+   field names (Claude Code's hook JSON schema hasn't been read from
+   `reference/claude-code/` yet; do that before writing it, same discipline
+   as the Codex side). Needs the user's sign-off before touching
    `~/.claude/settings.json` (global, shared across every session on this
-   machine).
+   machine) -- same as the Codex integration file, installation into any
+   real config.toml/settings.json is not automatic.
 2. Milestone 5: LLM graph-diff extraction -- needs a labeled corpus; out of
    scope until 1 is solid. Extractor backend, per user direction: either
    shell out to Codex/Claude Code as a coding-agent task (i.e. give the

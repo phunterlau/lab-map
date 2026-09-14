@@ -8,12 +8,15 @@ with the same evidence-required contract; nothing here is extractor-only.
 """
 from __future__ import annotations
 
+import json
+import sys
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from trace_mind.graph import repository as graph_repo
+from trace_mind.hooks import codex as codex_hooks
 from trace_mind.normalize.pipeline import ingest_session
 from trace_mind.projection import graphviz_export
 from trace_mind.storage.db import connect
@@ -67,6 +70,35 @@ def ingest(
     typer.echo(f"ingested {result.new_events} new event(s) for session {session_id}" + (
         " (cursor reset: file was rotated/truncated)" if result.rotated else ""
     ))
+
+
+@app.command()
+def hook(
+    provider: Annotated[str, typer.Option(help="claude or codex")],
+):
+    """Hook entry point: reads one hook event as JSON from stdin.
+
+    Fail-open by design (build plan section 11.2): this must never block or
+    crash the caller's actual Claude/Codex session. Any error here is
+    logged to stderr and swallowed; the process always exits 0. No LLM
+    call happens in this path -- only stdin parsing, a `hook_events` log
+    row, and opportunistic incremental ingest via `ingest_session()`.
+    """
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else {}
+
+        if provider == "codex":
+            codex_hooks.handle(payload)
+        elif provider == "claude":
+            typer.echo("trace-mind: claude hook not yet implemented", err=True)
+        else:
+            typer.echo(f"trace-mind: unknown provider {provider!r}", err=True)
+    except Exception as exc:  # fail open: never break the caller's session
+        typer.echo(f"trace-mind hook error (ignored): {exc}", err=True)
+
+    # No stdout output: every field in the Codex/Claude hook output schema
+    # is optional with a safe default, so silence means "continue normally."
 
 
 @node_app.command("add")
