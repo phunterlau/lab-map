@@ -20,7 +20,7 @@ from trace_mind.extraction import runner as extraction_runner
 from trace_mind.graph import repository as graph_repo
 from trace_mind.hooks import codex as codex_hooks
 from trace_mind.normalize.pipeline import ingest_session
-from trace_mind.projection import graphviz_export, html_export
+from trace_mind.projection import ascii_export, graphviz_export, html_export
 from trace_mind.storage.db import connect
 from trace_mind.transcripts.claude import ClaudeTranscriptAdapter
 from trace_mind.transcripts.codex import CodexTranscriptAdapter
@@ -301,6 +301,39 @@ def why(node_id: str, db: DbOpt = DEFAULT_DB):
         _print_node(conn, node_id)
     finally:
         conn.close()
+
+
+@app.command("map")
+def map_(
+    project_root: ProjectRootOpt = ".",
+    color: Annotated[str, typer.Option(help="auto|always|never")] = "auto",
+    db: DbOpt = DEFAULT_DB,
+):
+    """Print the whole project's decision graph as a horizontal ASCII tree,
+    with the most-recently-touched node highlighted -- the fast, no-file
+    alternative to `graph export --html`/`--png`. Meant to be run from a
+    slash command / skill; see integrations/README.md.
+    """
+    if color not in ("auto", "always", "never"):
+        typer.echo("--color must be one of: auto, always, never", err=True)
+        raise typer.Exit(1)
+    use_color = sys.stdout.isatty() if color == "auto" else color == "always"
+
+    conn = connect(db)
+    try:
+        project_id = graph_repo.ensure_project(conn, project_root)
+        output = ascii_export.render_ascii(conn, project_id, use_color=use_color)
+    finally:
+        conn.close()
+
+    # click.echo() (which typer.echo() wraps) strips ANSI codes whenever
+    # stdout doesn't look like an interactive terminal -- true for every
+    # real caller of `--color always` (a coding agent's `!`/exec shell-out
+    # captures stdout through a pipe, never a tty). Without `color=True`
+    # here, `--color always` would be a silent no-op in the one context it
+    # exists for -- caught by running the actual CLI end to end, not just
+    # calling render_ascii() directly the way the unit tests do.
+    typer.echo(output, color=use_color or None)
 
 
 def main() -> None:

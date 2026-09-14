@@ -89,6 +89,24 @@ hooks are not wired yet ("hooks to codex for now").
   prints on the CLI, one hop only (not a recursive ancestor walk).
   `dev/render_demo_graph.py` regenerates `assets/demo-graph.html` alongside
   the PNG.
+- `projection/ascii_export.py` -- `trace-mind map`: the whole project's
+  graph as a horizontal (`tree`-style) ASCII tree, most-recently-touched
+  node highlighted as "YOU ARE HERE". The graph is a DAG with no consistent
+  parent/child edge-direction convention (real `DERIVED_FROM` edges in
+  `local/kgw-example/build.py` point both ways depending on the pair), so
+  the tree is a **connectivity-only BFS spanning tree** rooted at `goal`
+  nodes -- adjacency treats every edge as undirected for shape purposes,
+  but every connector is still annotated with the edge's real type and
+  real declared direction, so the tree shape never misrepresents what an
+  edge actually says. Nodes no BFS reaches render under an `(unlinked)`
+  heading. `--color always` has to explicitly pass `color=True` through to
+  `click.echo()` -- Click strips ANSI by default whenever stdout isn't a
+  real terminal, which is true for every actual caller of this flag (a
+  coding agent's shell-out captures stdout through a pipe); this was a
+  real bug caught by running the installed CLI end to end through a pipe,
+  not by the unit tests, which call `render_ascii()` directly and never
+  touch Click's output layer at all. See `integrations/README.md` for the
+  Claude Code/Codex/Pi wiring and the platform gap below.
 - `extraction/` -- the Milestone 5 LLM graph-diff extractor, per
   `docs/extraction_design.md`'s taxonomy. `prefilter.py` (build plan
   section 13: deterministic regex triggers, no classifier stage yet) gates
@@ -230,6 +248,34 @@ Hooks are wired into `/Users/hliu/temp/watermark/.codex/config.toml`
 alternative) for `SessionStart`/`Stop`/`PreCompact`/`SessionEnd`. Verified
 end to end against that exact path before leaving it live. Not wired
 anywhere else.
+
+## Slash-command integrations
+
+`trace-mind map` (above) is meant to be triggered from inside whichever
+coding agent the user is already talking to, not just the bare CLI.
+Checked against each platform's real source/docs before building this
+(`integrations/README.md` has the full detail):
+
+- **Claude Code**: a real, user-typed `/map` works
+  (`integrations/claude-code/commands/map.md`) -- still one model turn,
+  a few seconds' latency, not instant.
+- **Codex has no user-pluggable slash command mechanism at all** -- its
+  command list is a closed, compiled-in Rust enum
+  (`reference/codex/codex-rs/tui/src/slash_command.rs`), and an
+  unrecognized leading-slash string is actively rejected. The closest
+  equivalent is a Skill (`integrations/codex/skills/map/SKILL.md`),
+  invoked via the `/skills` picker or natural language -- never by typing
+  `/map` itself. This is a real platform gap, documented as such rather
+  than worked around with something that would misleadingly look the
+  same as the other two.
+- **Pi**: a real, user-typed `/map` via an extension
+  (`integrations/pi/trace-mind-map.ts`), and the only one of the three
+  where the handler runs with zero LLM turn -- genuinely instant. Built
+  from Pi's published docs only; no local Pi source was available to
+  verify against the way the Codex/Claude Code claims above were.
+
+None of the three are installed automatically -- same manual-copy
+convention as `integrations/codex/config.toml.example`.
 
 ## What's stubbed but not yet implemented
 
