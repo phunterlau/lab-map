@@ -4,7 +4,8 @@ All of these run `trace-mind map --color always` and show the result
 verbatim -- an ASCII, horizontal (`tree`-style) view of the current
 project's whole decision graph, most-recently-touched node highlighted as
 "YOU ARE HERE". None of these are installed automatically; copy the
-relevant file into your own config, same as `codex/config.toml.example`.
+relevant file into your own config (Claude Code, Codex) or run `pi
+install` on the package directory (Pi) -- see each platform's entry below.
 
 Prerequisite for all three: `trace-mind` must resolve on PATH as a real
 command (`cd <this repo> && uv tool install .`), and the target project
@@ -33,12 +34,18 @@ assumed:
   `/skills` picker or by describing what you want in plain language --
   not by typing `/map`.
 - **Pi** supports a real user-typed `/map` via an extension
-  (`integrations/pi/trace-mind-map.ts` -> copy to `.pi/extensions/` or
-  `~/.pi/agent/extensions/`), and it's the only one of the three where the
-  command handler runs with **zero LLM turn** -- genuinely instant, not
-  model-mediated. Built from Pi's published docs only (no local Pi source
-  was available to check directly, unlike the two above); see the comment
-  at the top of that file for exactly what's confirmed vs. not.
+  (`integrations/pi/trace-mind-map/` -> `pi install
+  ./integrations/pi/trace-mind-map` for global, or `pi install -l
+  ./integrations/pi/trace-mind-map` for project-local), and it's the only
+  one of the three where the command handler runs with **zero LLM turn**
+  -- genuinely instant, not model-mediated. A pi extension is an
+  installable package (`package.json` declaring `"pi":
+  {"extensions": [...]}` plus the `.ts` file it points at), not a loose
+  file dropped into a folder -- confirmed against a real installed Pi
+  extension on this machine and the actual
+  `@earendil-works/pi-coding-agent` type definitions, not docs alone
+  (unlike the first version of this integration); see the comment at the
+  top of `extension.ts` for exactly what's confirmed and where.
 
 ## The color caveat
 
