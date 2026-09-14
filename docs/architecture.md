@@ -14,7 +14,7 @@ the graph is interpreted state
 Markdown is the human-readable projection
 ```
 
-## What's built (build plan Milestones 0-4 + Codex half of Milestone 2)
+## What's built (build plan Milestones 0-5 + Codex half of Milestone 2)
 
 Real transcript file -> adapter -> `NormalizedEvent` -> SQLite -> cursor
 advance -> re-run is idempotent -> manual graph (nodes/edges/provenance) ->
@@ -89,6 +89,33 @@ hooks are not wired yet ("hooks to codex for now").
   prints on the CLI, one hop only (not a recursive ancestor walk).
   `dev/render_demo_graph.py` regenerates `assets/demo-graph.html` alongside
   the PNG.
+- `extraction/` -- the Milestone 5 LLM graph-diff extractor, per
+  `docs/extraction_design.md`'s taxonomy. `prefilter.py` (build plan
+  section 13: deterministic regex triggers, no classifier stage yet) gates
+  everything else -- nothing reaches the LLM unless a window matches. The
+  event ids a window covers are given to the model only as short local
+  labels (`e1`, `e2`, ...) via `window.py`, never as real
+  `normalized_events.id`s -- the model structurally cannot cite evidence it
+  wasn't given; `apply.py` rejects any label that doesn't resolve.
+  `client.py` calls GPT-5.6-Luna via the OpenAI Responses API
+  (`OPENAI_API_KEY`, per user direction -- not the Anthropic API); the
+  alternative backend the user mentioned (shell out to Codex/Claude as a
+  coding-agent task) is not implemented, since it's a different enough
+  call shape that building an abstraction for it before it exists would be
+  speculative. `models.py` validates the model's JSON against the same
+  ontology `graph.repository` enforces (build plan section 14's output
+  contract) before anything is applied; a structurally malformed envelope
+  is rejected whole, but one bad mutation inside an otherwise-good envelope
+  is skipped without discarding the rest (`apply.py`). `ids.py` mints real
+  node ids for the model's `temp_id`s (one counter per project+type-prefix).
+  `runner.py` ties it together and enforces idempotence via
+  `extraction_runs.UNIQUE(input_hash, prompt_version)` -- the hash covers
+  only the event delta + prompt version, deliberately excluding the graph
+  neighborhood (see the real bug this caught, below). `merge_suggestions`/
+  `needs_review` are surfaced, never auto-applied (build plan section 15).
+  Never called from `hooks/` -- hooks must stay LLM-free and off the
+  critical path (section 11.2); `trace-mind extract` is a separate, manual
+  command that ingests then extracts.
 - `tests/fixtures/{claude,codex}/` -- synthetic fixtures, not copied from
   any real session (copying real local transcript content into this repo
   was deliberately refused mid-build as a provenance risk -- see git log).
@@ -127,6 +154,42 @@ range; `trace-mind why <node>` correctly walked the chain including across
 the real compaction boundary between the two physical files. This run is
 what surfaced the multi-file cursor bug above. Specifics of that research
 project's content are intentionally not reproduced here.
+
+The Milestone 5 extractor was also run for real against this session (on a
+scratch copy of the local example DB, never the committed one) at two
+turns independently identified and byte-verified during the
+`docs/extraction_design.md` cross-check: an explicit user-initiated branch,
+and a rejected experiment immediately followed by the next direction it
+motivated. Findings:
+
+- The rejection turn: the model correctly reused the two already-existing
+  nodes it should have (the real goal, and the already-modeled rejected
+  experiment) rather than duplicating either, and linked a new option
+  it created back to both with real, resolvable evidence -- no hallucinated
+  labels, nothing rejected by `apply.py`.
+- The branch turn, first attempt: the model minted a brand-new `goal` node
+  instead of linking to the existing one. Root cause, confirmed by
+  inspecting the actual window built: the existing goal had been created
+  once near the start of the project and never updated again, so a
+  pure-recency top-15 neighborhood -- ordinary churn from later turns --
+  had pushed it out of the context the model was given. It could not link
+  to a node it was never shown. Fixed in `window.py` (goals are now always
+  included regardless of recency) and covered by a regression test
+  (`test_window_always_includes_goals_even_when_not_recent`).
+- Same branch turn, re-run after the fix: the existing goal was correctly
+  visible and correctly reused for one linkage, but the model still
+  introduced a new, narrower `goal` node for the branch's specific
+  objective rather than scoping it under the existing option/goal. This is
+  the decomposition-granularity question `docs/extraction_design.md`
+  already flagged as open, now with a concrete real example rather than a
+  hypothetical -- left as a known v1 limitation, not fixed here.
+
+Net: one real, mechanical bug found and fixed (goal visibility); one real,
+open semantic-judgment limitation confirmed and left as-is, consistent
+with the acceptance criteria actually being tested (provenance, schema
+validation, idempotence) rather than extraction quality, which build plan
+section 22 correctly treats as a separate, later measurement problem
+needing a labeled corpus.
 
 ### Hook latency: measured
 
@@ -170,12 +233,16 @@ anywhere else.
 
 ## What's stubbed but not yet implemented
 
-`extraction/`, `provenance/` (only its table exists), `recall/`, `mcp/`,
-and the Claude Code half of `hooks/` are not built. `projection/` covers
-the *graph* projection (DOT/PNG/interactive HTML) -- the narrative
-`RESEARCH_MAP.md` Markdown projection (build plan section 17) is still not
-built; that's a different, text-first view (active questions, branches,
-rejected/dormant callouts) that the graph viewer doesn't replace.
+`provenance/` (only its table exists -- `graph/repository.py` writes
+provenance rows directly today), `recall/`, `mcp/`, and the Claude Code
+half of `hooks/` are not built. `extraction/` (Milestone 5) is now a
+working v1 slice -- see above -- but has no labeled corpus and no measured
+precision/recall (build plan section 22); "not yet implemented" no longer
+applies to it, "not yet measured" does. `projection/` covers the *graph*
+projection (DOT/PNG/interactive HTML) -- the narrative `RESEARCH_MAP.md`
+Markdown projection (build plan section 17) is still not built; that's a
+different, text-first view (active questions, branches, rejected/dormant
+callouts) that the graph viewer doesn't replace.
 
 ## Next steps, in the order the build plan recommends (section 26)
 
@@ -187,18 +254,14 @@ rejected/dormant callouts) that the graph viewer doesn't replace.
    `~/.claude/settings.json` (global, shared across every session on this
    machine) -- same as the Codex integration file, installation into any
    real config.toml/settings.json is not automatic.
-2. Milestone 5: LLM graph-diff extraction -- design in `docs/extraction_design.md`,
-   grounded in a real cross-check of `local/kgw-example/`'s graph against
-   the full real transcript (a 7-type "moment taxonomy": OFFER_AND_PICK vs.
-   SEQUENCE_PICK is the sharpest distinction found, since both look like
-   "agent lists options, user picks one" but only one of them means the
-   others were rejected). Not yet implemented -- needs a labeled corpus;
-   out of scope until 1 is solid. Extractor backend, per user direction:
-   either shell out to Codex/Claude Code as a coding-agent task (i.e. give
-   the agent native prompt access, not a raw API call), or call OpenAI's
-   GPT-5.6-Luna directly via the `OPENAI_API_KEY` env var
-   (https://developers.openai.com/api/docs/models/gpt-5.6-luna). Not an
-   Anthropic API call.
+2. Milestone 5 hardening: a labeled corpus and measured precision/recall
+   per node/edge type (build plan section 22-23; "Rejected Alternative
+   Recall" is the metric that matters most), lexical/FTS neighborhood
+   retrieval to replace the recency-only heuristic beyond the goals-always
+   fix already made, and a decision on the three open questions in
+   `docs/extraction_design.md` (decomposition granularity -- now with a
+   second real example, see above; extraction cadence; whether queued
+   sequence items get nodes).
 3. Milestones 6-9: Markdown projection (`RESEARCH_MAP.md` -- the actual
    human-facing deliverable; not yet built, deliberately, pending direction
    on scope/output location), MCP recall, backfill, synthesis.

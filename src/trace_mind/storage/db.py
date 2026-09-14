@@ -130,6 +130,20 @@ CREATE TABLE IF NOT EXISTS graph_edges (
   FOREIGN KEY(target_node_id) REFERENCES graph_nodes(id)
 );
 
+CREATE TABLE IF NOT EXISTS graph_id_counters (
+  project_id TEXT NOT NULL,
+  prefix TEXT NOT NULL,
+  next_seq INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (project_id, prefix)
+);
+-- Backs extraction/ids.py's node-id allocator (Milestone 5): the LLM
+-- extractor emits temp_ids ("n1"), not real node ids, so something has to
+-- mint the real id before create_edges can be applied. One counter per
+-- (project, type-prefix) rather than one global counter -- readable
+-- per-type numbering (O-0001, O-0002, ... ; D-0001, D-0002, ...) matters
+-- more here than matching the incidental global numbering used in the
+-- hand-authored demo/example graphs.
+
 CREATE TABLE IF NOT EXISTS provenance (
   id TEXT PRIMARY KEY,
   object_type TEXT NOT NULL,

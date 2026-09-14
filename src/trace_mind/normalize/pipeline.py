@@ -21,9 +21,14 @@ PARSER_VERSION = "v1"
 
 
 class IngestResult:
-    def __init__(self, new_events: int, rotated: bool):
+    def __init__(self, new_events: int, rotated: bool, new_event_ids: list[str] | None = None):
         self.new_events = new_events
         self.rotated = rotated
+        self.new_event_ids = new_event_ids or []
+        """Ids of events actually inserted this call (Milestone 5 needs these
+        to build the extraction window's transcript delta -- a re-run after
+        they're already ingested inserts zero rows, so this can't be
+        recovered later by querying; it has to be captured at insert time)."""
 
 
 def ingest_session(
@@ -79,6 +84,7 @@ def ingest_session(
 
     now = datetime.now(timezone.utc).isoformat()
     new_events = 0
+    new_event_ids: list[str] = []
 
     with conn:
         if rotated:
@@ -105,6 +111,7 @@ def ingest_session(
             )
             if cur.rowcount:
                 new_events += 1
+                new_event_ids.append(event.id)
 
         conn.execute(
             """
@@ -130,7 +137,7 @@ def ingest_session(
             ),
         )
 
-    return IngestResult(new_events=new_events, rotated=rotated)
+    return IngestResult(new_events=new_events, rotated=rotated, new_event_ids=new_event_ids)
 
 
 def _event_row(event: NormalizedEvent) -> tuple:
