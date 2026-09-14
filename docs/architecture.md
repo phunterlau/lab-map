@@ -187,10 +187,15 @@ rejected/dormant callouts) that the graph viewer doesn't replace.
    `~/.claude/settings.json` (global, shared across every session on this
    machine) -- same as the Codex integration file, installation into any
    real config.toml/settings.json is not automatic.
-2. Milestone 5: LLM graph-diff extraction -- needs a labeled corpus; out of
-   scope until 1 is solid. Extractor backend, per user direction: either
-   shell out to Codex/Claude Code as a coding-agent task (i.e. give the
-   agent native prompt access, not a raw API call), or call OpenAI's
+2. Milestone 5: LLM graph-diff extraction -- design in `docs/extraction_design.md`,
+   grounded in a real cross-check of `local/kgw-example/`'s graph against
+   the full real transcript (a 7-type "moment taxonomy": OFFER_AND_PICK vs.
+   SEQUENCE_PICK is the sharpest distinction found, since both look like
+   "agent lists options, user picks one" but only one of them means the
+   others were rejected). Not yet implemented -- needs a labeled corpus;
+   out of scope until 1 is solid. Extractor backend, per user direction:
+   either shell out to Codex/Claude Code as a coding-agent task (i.e. give
+   the agent native prompt access, not a raw API call), or call OpenAI's
    GPT-5.6-Luna directly via the `OPENAI_API_KEY` env var
    (https://developers.openai.com/api/docs/models/gpt-5.6-luna). Not an
    Anthropic API call.
