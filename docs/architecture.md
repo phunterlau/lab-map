@@ -141,6 +141,22 @@ on a much hotter path. If that happens, the fix is probably a separate,
 minimal-import hook entry point rather than reusing the full Typer app --
 not done now since nothing currently needs it.
 
+### Live install
+
+`uv tool install .` was run so a global `trace-mind` binary exists on PATH
+(`~/.local/bin/trace-mind`) for hook commands to invoke without hardcoding
+a venv path. This is a **non-editable** install -- future code changes in
+this repo do not automatically reach it. Any session continuing this build
+needs `cd /Users/hliu/temp/trace_mind && uv tool install . --reinstall`
+after changing hook-path code, or the live hooks below keep running the
+old version.
+
+Hooks are wired into `/Users/hliu/temp/watermark/.codex/config.toml`
+(per-project, user's choice over the global `~/.codex/config.toml`
+alternative) for `SessionStart`/`Stop`/`PreCompact`/`SessionEnd`. Verified
+end to end against that exact path before leaving it live. Not wired
+anywhere else.
+
 ## What's stubbed but not yet implemented
 
 `extraction/`, `provenance/` (only its table exists), `recall/`, `mcp/`,
