@@ -1,0 +1,218 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>trace-mind graph</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, Helvetica, Arial, sans-serif; }
+  #app { display: flex; height: 100vh; }
+  #viewport { flex: 1; overflow: hidden; position: relative; background: #fafafa; cursor: grab; }
+  #viewport.dragging { cursor: grabbing; }
+  #canvas { transform-origin: 0 0; width: fit-content; }
+  #panel { width: 360px; flex: none; border-left: 1px solid #ddd; padding: 16px; overflow-y: auto; box-sizing: border-box; }
+  #panel h2 { margin-top: 0; font-size: 16px; }
+  #panel h3 { font-size: 13px; color: #555; margin-bottom: 4px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; color: white; font-size: 12px; }
+  .edge-row, .prov-row { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #eee; font-size: 13px; }
+  .muted { color: #888; font-size: 12px; }
+  .hint { color: #888; padding: 16px; font-size: 13px; }
+  g.node { cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="viewport">
+    <div id="canvas">
+<svg width="1025pt" height="214pt"
+ viewBox="0.00 0.00 1025.00 214.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 210.25)">
+<title>research_map</title>
+<polygon fill="white" stroke="none" points="-4,4 -4,-210.25 1021.41,-210.25 1021.41,4 -4,4"/>
+<!-- Q&#45;0001 -->
+<g id="node1" class="node">
+<title>Q&#45;0001</title>
+<polygon fill="#f9a825" stroke="black" points="289.1,-136.45 289.1,-170.05 205.6,-193.81 87.5,-193.81 4,-170.05 4,-136.45 87.5,-112.69 205.6,-112.69 289.1,-136.45"/>
+<polygon fill="none" stroke="black" points="293.1,-133.43 293.1,-173.07 206.15,-197.81 86.95,-197.81 0,-173.07 0,-133.43 86.95,-108.69 206.15,-108.69 293.1,-133.43"/>
+<text xml:space="preserve" text-anchor="middle" x="146.55" y="-162.45" font-family="Helvetica,sans-Serif" font-size="14.00" fill="white">Q&#45;0001</text>
+<text xml:space="preserve" text-anchor="middle" x="146.55" y="-147.45" font-family="Helvetica,sans-Serif" font-size="14.00" fill="white">Persistent research memory</text>
+<text xml:space="preserve" text-anchor="middle" x="146.55" y="-132.45" font-family="Helvetica,sans-Serif" font-size="14.00" fill="white">[goal / exploring]</text>
+</g>
+<!-- O&#45;0002 -->
+<g id="node2" class="node">
+<title>O&#45;0002</title>
+<polygon fill="#9e9e9e" stroke="black" points="645.8,-53 409.3,-53 409.3,0 645.8,0 645.8,-53"/>
+<text xml:space="preserve" text-anchor="middle" x="527.55" y="-35.7" font-family="Helvetica,sans-Serif" font-size="14.00" fill="white">O&#45;0002</text>
+<text xml:space="preserve" text-anchor="middle" x="527.55" y="-20.7" font-family="Helvetica,sans-Serif" font-size="14.00" fill="white">Graphiti (temporal knowledge graph)</text>
+<text xml:space="preserve" text-anchor="middle" x="527.55" y="-5.7" font-family="Helvetica,sans-Serif" font-size="14.00" fill="white">[option / dormant]</text>
+</g>
+<!-- Q&#45;0001&#45;&gt;O&#45;0002 -->
+<g id="edge1" class="edge">
+<title>Q&#45;0001&#45;&gt;O&#45;0002</title>
+<path fill="none" stroke="black" d="M227.55,-114.51C261.63,-99.59 302.02,-83.14 339.55,-71 358.24,-64.95 378.23,-59.39 397.95,-54.42"/>
+<polygon fill="black" stroke="black" points="398.53,-57.88 407.4,-52.07 396.85,-51.08 398.53,-57.88"/>
+<text xml:space="preserve" text-anchor="middle" x="366.55" y="-72.75" font-family="Helvetica,sans-Serif" font-size="10.00">EXPLORES</text>
+</g>
+<!-- O&#45;0003 -->
+<g id="node3" class="node">
+<title>O&#45;0003</title>
+<polygon fill="#2e7d32" stroke="black" points="391.3,-53 265.8,-53 265.8,0 391.3,0 391.3,-53"/>
+<text xml:space="preserve" text-anchor="middle" x="328.55" y="-35.7" font-family="Helvetica,sans-Serif" font-size="14.00" fill="white">O&#45;0003</text>
+<text xml:space="preserve" text-anchor="middle" x="328.55" y="-20.7" font-family="Helvetica,sans-Serif" font-size="14.00" fill="white">Markdown + MCP</text>
+<text xml:space="preserve" text-anchor="middle" x="328.55" y="-5.7" font-family="Helvetica,sans-Serif" font-size="14.00" fill="white">[option / chosen]</text>
+</g>
+<!-- Q&#45;0001&#45;&gt;O&#45;0003 -->
+<g id="edge2" class="edge">
+<title>Q&#45;0001&#45;&gt;O&#45;0003</title>
+<path fill="none" stroke="black" d="M201.09,-108.22C217.32,-95.73 235.37,-82.43 252.55,-71 258.45,-67.08 264.72,-63.14 271.03,-59.33"/>
+<polygon fill="black" stroke="black" points="272.81,-62.34 279.62,-54.23 269.24,-56.32 272.81,-62.34"/>
+<text xml:space="preserve" text-anchor="middle" x="279.55" y="-72.75" font-family="Helvetica,sans-Serif" font-size="10.00">EXPLORES</text>
+</g>
+<!-- O&#45;0004 -->
+<g id="node4" class="node">
+<title>O&#45;0004</title>
+<polygon fill="#9e9e9e" stroke="black" points="247.92,-53 39.17,-53 39.17,0 247.92,0 247.92,-53"/>
+<text xml:space="preserve" text-anchor="middle" x="143.55" y="-35.7" font-family="Helvetica,sans-Serif" font-size="14.00" fill="white">O&#45;0004</text>
+<text xml:space="preserve" text-anchor="middle" x="143.55" y="-20.7" font-family="Helvetica,sans-Serif" font-size="14.00" fill="white">Postgres&#45;backed decision graph</text>
+<text xml:space="preserve" text-anchor="middle" x="143.55" y="-5.7" font-family="Helvetica,sans-Serif" font-size="14.00" fill="white">[option / dormant]</text>
+</g>
+<!-- Q&#45;0001&#45;&gt;O&#45;0004 -->
+<g id="edge3" class="edge">
+<title>Q&#45;0001&#45;&gt;O&#45;0004</title>
+<path fill="none" stroke="black" d="M145.49,-108.27C145.15,-94.05 144.77,-78.44 144.45,-64.76"/>
+<polygon fill="black" stroke="black" points="147.95,-64.74 144.21,-54.83 140.95,-64.91 147.95,-64.74"/>
+<text xml:space="preserve" text-anchor="middle" x="171.78" y="-72.75" font-family="Helvetica,sans-Serif" font-size="10.00">EXPLORES</text>
+</g>
+<!-- D&#45;0005 -->
+<g id="node5" class="node">
+<title>D&#45;0005</title>
+<polygon fill="#2e7d32" stroke="black" points="523.55,-206.25 311.05,-153.25 523.55,-100.25 736.05,-153.25 523.55,-206.25"/>
+<text xml:space="preserve" text-anchor="middle" x="523.55" y="-162.45" font-family="Helvetica,sans-Serif" font-size="14.00" fill="white">D&#45;0005</text>
+<text xml:space="preserve" text-anchor="middle" x="523.55" y="-147.45" font-family="Helvetica,sans-Serif" font-size="14.00" fill="white">Prototype Markdown + MCP first</text>
+<text xml:space="preserve" text-anchor="middle" x="523.55" y="-132.45" font-family="Helvetica,sans-Serif" font-size="14.00" fill="white">[decision / chosen]</text>
+</g>
+<!-- D&#45;0005&#45;&gt;O&#45;0002 -->
+<g id="edge5" class="edge">
+<title>D&#45;0005&#45;&gt;O&#45;0002</title>
+<path fill="none" stroke="black" d="M525.21,-100.43C525.6,-88.4 526,-75.84 526.36,-64.6"/>
+<polygon fill="black" stroke="black" points="529.85,-65.06 526.67,-54.95 522.85,-64.83 529.85,-65.06"/>
+<text xml:space="preserve" text-anchor="middle" x="580.14" y="-72.75" font-family="Helvetica,sans-Serif" font-size="10.00">REJECTED_BECAUSE</text>
+</g>
+<!-- D&#45;0005&#45;&gt;O&#45;0003 -->
+<g id="edge4" class="edge">
+<title>D&#45;0005&#45;&gt;O&#45;0003</title>
+<path fill="none" stroke="black" d="M464.51,-114.48C437.06,-96.92 404.76,-76.25 378.53,-59.47"/>
+<polygon fill="black" stroke="black" points="380.75,-56.74 370.44,-54.3 376.97,-62.63 380.75,-56.74"/>
+<text xml:space="preserve" text-anchor="middle" x="447.21" y="-72.75" font-family="Helvetica,sans-Serif" font-size="10.00">CHOSEN_OVER</text>
+</g>
+<!-- R&#45;0006 -->
+<g id="node6" class="node">
+<title>R&#45;0006</title>
+<polygon fill="#f9a825" stroke="black" points="1017.41,-153.25 951.48,-196.52 819.62,-196.52 753.69,-153.25 819.62,-109.98 951.48,-109.98 1017.41,-153.25"/>
+<text xml:space="preserve" text-anchor="middle" x="885.55" y="-162.45" font-family="Helvetica,sans-Serif" font-size="14.00" fill="white">R&#45;0006</text>
+<text xml:space="preserve" text-anchor="middle" x="885.55" y="-147.45" font-family="Helvetica,sans-Serif" font-size="14.00" fill="white">Reconsider Graphiti</text>
+<text xml:space="preserve" text-anchor="middle" x="885.55" y="-132.45" font-family="Helvetica,sans-Serif" font-size="14.00" fill="white">[revisit_condition / open]</text>
+</g>
+<!-- R&#45;0006&#45;&gt;O&#45;0002 -->
+<g id="edge6" class="edge">
+<title>R&#45;0006&#45;&gt;O&#45;0002</title>
+<path fill="none" stroke="black" d="M802.43,-120.86C783.76,-113.95 764.01,-106.76 745.55,-100.25 703.93,-85.58 657.58,-70.01 618.36,-57.05"/>
+<polygon fill="black" stroke="black" points="619.53,-53.75 608.93,-53.94 617.33,-60.4 619.53,-53.75"/>
+<text xml:space="preserve" text-anchor="middle" x="730.17" y="-72.75" font-family="Helvetica,sans-Serif" font-size="10.00">REVISIT_WHEN</text>
+</g>
+</g>
+</svg>
+
+    </div>
+  </div>
+  <div id="panel"><div class="hint">Click a node to see its details. Scroll to zoom, drag to pan.</div></div>
+</div>
+<script>
+const NODE_DATA = {"Q-0001": {"type": "goal", "title": "Persistent research memory", "summary": "How should evolving research decisions survive across sessions and agents?", "status": "exploring", "confidence": null, "edges": [{"direction": "->", "type": "EXPLORES", "other": "O-0002", "reason": null}, {"direction": "->", "type": "EXPLORES", "other": "O-0003", "reason": null}, {"direction": "->", "type": "EXPLORES", "other": "O-0004", "reason": null}], "provenance": [{"session_id": "01a0aaaa-0000-7000-8000-000000000001", "turn_id": "t-0001", "byte_start": 1105, "byte_end": 1584, "excerpt": "We need persistent research memory so we stop losing track of why we rejected an approach across sessions. What are our options for storing the evolving research/decision state?"}]}, "O-0002": {"type": "option", "title": "Graphiti (temporal knowledge graph)", "summary": "Native time-varying edges, but needs a continuously running service.", "status": "dormant", "confidence": null, "edges": [{"direction": "<-", "type": "EXPLORES", "other": "Q-0001", "reason": null}, {"direction": "<-", "type": "REJECTED_BECAUSE", "other": "D-0005", "reason": "operationally heavy for current scale"}, {"direction": "<-", "type": "REVISIT_WHEN", "other": "R-0006", "reason": null}], "provenance": [{"session_id": "01a0aaaa-0000-7000-8000-000000000001", "turn_id": "t-0001", "byte_start": 1105, "byte_end": 1584, "excerpt": "We need persistent research memory so we stop losing track of why we rejected an approach across sessions. What are our options for storing the evolving research/decision state?"}]}, "O-0003": {"type": "option", "title": "Markdown + MCP", "summary": "Zero-infra, human-readable; weaker at representing how a decision changed over time.", "status": "chosen", "confidence": null, "edges": [{"direction": "<-", "type": "EXPLORES", "other": "Q-0001", "reason": null}, {"direction": "<-", "type": "CHOSEN_OVER", "other": "D-0005", "reason": null}], "provenance": [{"session_id": "01a0aaaa-0000-7000-8000-000000000001", "turn_id": "t-0001", "byte_start": 1105, "byte_end": 1584, "excerpt": "We need persistent research memory so we stop losing track of why we rejected an approach across sessions. What are our options for storing the evolving research/decision state?"}]}, "O-0004": {"type": "option", "title": "Postgres-backed decision graph", "summary": "Most flexible querying; a server + migrations for a single-person project.", "status": "dormant", "confidence": null, "edges": [{"direction": "<-", "type": "EXPLORES", "other": "Q-0001", "reason": null}], "provenance": [{"session_id": "01a0aaaa-0000-7000-8000-000000000001", "turn_id": "t-0001", "byte_start": 1105, "byte_end": 1584, "excerpt": "We need persistent research memory so we stop losing track of why we rejected an approach across sessions. What are our options for storing the evolving research/decision state?"}]}, "D-0005": {"type": "decision", "title": "Prototype Markdown + MCP first", "summary": "Cheap to build and throw away; keep Graphiti as a documented fallback.", "status": "chosen", "confidence": null, "edges": [{"direction": "->", "type": "CHOSEN_OVER", "other": "O-0003", "reason": null}, {"direction": "->", "type": "REJECTED_BECAUSE", "other": "O-0002", "reason": "operationally heavy for current scale"}], "provenance": [{"session_id": "01a0aaaa-0000-7000-8000-000000000001", "turn_id": "t-0001", "byte_start": 1105, "byte_end": 1584, "excerpt": "We need persistent research memory so we stop losing track of why we rejected an approach across sessions. What are our options for storing the evolving research/decision state?"}]}, "R-0006": {"type": "revisit_condition", "title": "Reconsider Graphiti", "summary": "If temporal/versioned queries become central to how the graph is used.", "status": "open", "confidence": null, "edges": [{"direction": "->", "type": "REVISIT_WHEN", "other": "O-0002", "reason": null}], "provenance": [{"session_id": "01a0aaaa-0000-7000-8000-000000000001", "turn_id": "t-0001", "byte_start": 1105, "byte_end": 1584, "excerpt": "We need persistent research memory so we stop losing track of why we rejected an approach across sessions. What are our options for storing the evolving research/decision state?"}]}};
+const STATUS_COLOR = {"chosen": "#2e7d32", "rejected": "#c62828", "dormant": "#9e9e9e", "completed": "#1565c0", "exploring": "#f9a825", "open": "#f9a825", "candidate": "#6a1b9a", "blocked": "#c62828", "superseded": "#9e9e9e"};
+
+const viewport = document.getElementById('viewport');
+const canvas = document.getElementById('canvas');
+let scale = 1, tx = 0, ty = 0, dragging = false, lastX = 0, lastY = 0;
+
+function applyTransform() {
+  canvas.style.transform = 'translate(' + tx + 'px, ' + ty + 'px) scale(' + scale + ')';
+}
+
+viewport.addEventListener('wheel', function (e) {
+  e.preventDefault();
+  const delta = -e.deltaY * 0.001;
+  const newScale = Math.min(4, Math.max(0.1, scale * (1 + delta)));
+  const rect = viewport.getBoundingClientRect();
+  const cx = e.clientX - rect.left;
+  const cy = e.clientY - rect.top;
+  tx = cx - (cx - tx) * (newScale / scale);
+  ty = cy - (cy - ty) * (newScale / scale);
+  scale = newScale;
+  applyTransform();
+}, { passive: false });
+
+viewport.addEventListener('mousedown', function (e) {
+  dragging = true;
+  lastX = e.clientX;
+  lastY = e.clientY;
+  viewport.classList.add('dragging');
+});
+window.addEventListener('mousemove', function (e) {
+  if (!dragging) return;
+  tx += e.clientX - lastX;
+  ty += e.clientY - lastY;
+  lastX = e.clientX;
+  lastY = e.clientY;
+  applyTransform();
+});
+window.addEventListener('mouseup', function () {
+  dragging = false;
+  viewport.classList.remove('dragging');
+});
+
+applyTransform();
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+function renderPanel(nodeId) {
+  const d = NODE_DATA[nodeId];
+  const panel = document.getElementById('panel');
+  if (!d) { panel.innerHTML = '<div class="hint">No data for ' + escapeHtml(nodeId) + '</div>'; return; }
+  const color = STATUS_COLOR[d.status] || '#888';
+  let html = '<h2>' + escapeHtml(nodeId) + '</h2>';
+  html += '<div><span class="badge" style="background:' + color + '">' + escapeHtml(d.status) + '</span> ';
+  html += '<span class="muted">' + escapeHtml(d.type) + (d.confidence != null ? ' &middot; confidence ' + d.confidence : '') + '</span></div>';
+  html += '<p>' + escapeHtml(d.title) + '</p>';
+  if (d.summary) html += '<p class="muted">' + escapeHtml(d.summary) + '</p>';
+  if (d.edges.length) {
+    html += '<h3>Edges</h3>';
+    d.edges.forEach(function (e) {
+      html += '<div class="edge-row">' + e.direction + ' <b>' + escapeHtml(e.type) + '</b> ' + escapeHtml(e.other);
+      if (e.reason) html += '<br><span class="muted">' + escapeHtml(e.reason) + '</span>';
+      html += '</div>';
+    });
+  }
+  if (d.provenance.length) {
+    html += '<h3>Provenance</h3>';
+    d.provenance.forEach(function (p) {
+      html += '<div class="prov-row"><span class="muted">session ' + escapeHtml(p.session_id) + ' turn ' + escapeHtml(p.turn_id);
+      html += '<br>bytes [' + p.byte_start + ':' + p.byte_end + ']</span><br>' + escapeHtml(p.excerpt) + '</div>';
+    });
+  }
+  panel.innerHTML = html;
+}
+
+canvas.addEventListener('click', function (e) {
+  const g = e.target.closest('g.node');
+  if (!g) return;
+  const title = g.querySelector('title');
+  if (!title) return;
+  renderPanel(title.textContent);
+});
+</script>
+</body>
+</html>

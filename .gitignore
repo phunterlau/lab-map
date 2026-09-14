@@ -216,3 +216,21 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- lab-map / trace-mind specific ---
+
+# Reference repos: cloned for architectural study only, never vendored.
+# The frozen commit/origin snapshot IS committed -- everything else isn't.
+/reference/*
+!/reference/REFERENCES.lock
+!/reference/REFERENCES.urls
+
+# Per-project generated state (regenerable from the DB)
+.trace-mind/research.db
+.trace-mind/research.db-*
+
+# Local-only examples built from real (non-synthetic) transcript content.
+# Never committed: assets/ is contractually synthetic-only (see
+# assets/README.md); this is where a real-data example persists on disk
+# for the user without going into git history.
+/local/

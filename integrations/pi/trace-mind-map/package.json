@@ -1,0 +1,14 @@
+{
+  "name": "trace-mind-map",
+  "version": "0.1.0",
+  "description": "pi.dev extension -- /map command showing trace-mind's decision graph",
+  "type": "module",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "pi": {
+    "extensions": ["./extension.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

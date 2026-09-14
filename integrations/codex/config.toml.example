@@ -1,0 +1,44 @@
+# Codex hook wiring for trace-mind.
+#
+# Where to put this:
+#   - Per-project (recommended to start): <your-project>/.codex/config.toml
+#     Only Codex sessions run inside that project get tracked.
+#   - Global: ~/.codex/config.toml
+#     Every Codex session on this machine gets tracked. Affects shared,
+#     machine-wide state -- confirm this is what you want before switching.
+#
+# First install a globally-runnable `trace-mind` command (avoids hardcoding
+# a path to this repo's venv):
+#   cd /Users/hliu/temp/trace_mind && uv tool install .
+#
+# Then merge this into the target config.toml. If a [hooks] section already
+# exists there, add these [[hooks.<Event>]] blocks under it instead of
+# duplicating the [hooks] header.
+
+[hooks]
+
+[[hooks.SessionStart]]
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "trace-mind hook --provider codex"
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "trace-mind hook --provider codex"
+
+# PreCompact fires BEFORE the rewrite, with transcript_path still pointing
+# at the old (about-to-be-replaced) file -- this is the last chance to
+# flush anything written since the last Stop, before that file's tail
+# becomes unreachable. (Not PostCompact: by then transcript_path may point
+# at the new file, and the old file's final tail would never get ingested.
+# This is also what build plan section 11.1 specifies for V1.)
+[[hooks.PreCompact]]
+[[hooks.PreCompact.hooks]]
+type = "command"
+command = "trace-mind hook --provider codex"
+
+[[hooks.SessionEnd]]
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "trace-mind hook --provider codex"
