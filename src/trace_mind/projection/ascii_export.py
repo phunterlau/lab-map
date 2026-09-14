@@ -14,6 +14,7 @@ tree shape never misrepresents what the edge actually says.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections import deque
 from dataclasses import dataclass
@@ -37,6 +38,7 @@ _RESET = "\x1b[0m"
 _YOU_ARE_HERE_STYLE = "\x1b[1;7m"  # bold + reverse video
 
 UNLINKED_HEADING = "(unlinked)"
+OPEN_LOOPS_HEADING = "(open loops)"
 
 
 @dataclass
@@ -114,7 +116,7 @@ def render_ascii(conn: sqlite3.Connection, project_id: str, *, use_color: bool) 
             continue
         unlinked_forest.append((root_id, bfs_from(root_id)))
 
-    lines: list[str] = []
+    lines: list[str] = [_render_breadcrumb(by_id, forest, unlinked_forest, you_are_here, use_color=use_color), ""]
     for root_id, parent_of in forest:
         _render_tree(lines, by_id, parent_of, root_id, "", you_are_here=you_are_here, use_color=use_color)
 
@@ -123,7 +125,104 @@ def render_ascii(conn: sqlite3.Connection, project_id: str, *, use_color: bool) 
         for root_id, parent_of in unlinked_forest:
             _render_tree(lines, by_id, parent_of, root_id, "", you_are_here=you_are_here, use_color=use_color)
 
+    open_loop_lines = _render_open_loops(conn, project_id, by_id)
+    if open_loop_lines:
+        lines.append("")
+        lines.append(OPEN_LOOPS_HEADING)
+        lines.extend(open_loop_lines)
+
     return "\n".join(lines)
+
+
+def _render_breadcrumb(
+    by_id: dict[str, sqlite3.Row],
+    forest: list[tuple[str, dict[str, tuple[str, _Edge]]]],
+    unlinked_forest: list[tuple[str, dict[str, tuple[str, _Edge]]]],
+    you_are_here: str,
+    *,
+    use_color: bool,
+) -> str:
+    """'You are here: <root> -> ... -> <you_are_here>' -- the tree shows local
+    siblings but not the route from the goal, which is what "where are we"
+    actually means at a glance without scanning the whole tree for the
+    highlighted line."""
+    path = [you_are_here]
+    for _root_id, parent_of in (*forest, *unlinked_forest):
+        if you_are_here in parent_of:
+            current = you_are_here
+            while current in parent_of:
+                current = parent_of[current][0]
+                path.append(current)
+            break
+    path.reverse()
+
+    if len(path) == 1:
+        crumb = f"You are here: {path[0]}"
+    else:
+        crumb = "You are here: " + " → ".join(path)
+
+    if not use_color:
+        return crumb
+    return f"{_YOU_ARE_HERE_STYLE}{crumb}{_RESET}"
+
+
+def _render_open_loops(conn: sqlite3.Connection, project_id: str, by_id: dict[str, sqlite3.Row]) -> list[str]:
+    """Surfaces the machine's own record of "things possibly missed":
+    parked `revisit_condition` nodes (explicit REVISIT / PARK moments,
+    prompt.py taxonomy item 6) plus any `needs_review`/`merge_suggestions`
+    an extraction run declined to auto-apply (build plan section 15 -- these
+    are never applied automatically, so without this section they sit
+    unseen in `extraction_runs.output_json` forever). There is no
+    resolved/dismissed tracking yet (build plan section 18, not built) --
+    everything here is unconditionally still open every time `map` runs."""
+    lines: list[str] = []
+
+    for node in by_id.values():
+        if node["type"] == "revisit_condition" and node["status"] == "open":
+            lines.append(f"  [revisit_condition] {node['id']}: {node['title']}")
+
+    runs = conn.execute(
+        """
+        SELECT DISTINCT er.output_json
+        FROM extraction_runs er
+        WHERE er.status = 'applied' AND er.output_json IS NOT NULL
+          AND er.session_id IN (
+            SELECT DISTINCT ne.session_id
+            FROM provenance p
+            JOIN normalized_events ne ON ne.id = p.normalized_event_id
+            JOIN graph_nodes gn ON gn.id = p.object_id
+            WHERE p.object_type = 'node' AND gn.project_id = ?
+          )
+        ORDER BY er.output_json
+        """,
+        (project_id,),
+    ).fetchall()
+
+    seen_review: set[str] = set()
+    seen_merge: set[tuple[str, str]] = set()
+    for row in runs:
+        try:
+            envelope = json.loads(row["output_json"])
+        except (TypeError, ValueError):
+            continue
+        for nr in envelope.get("needs_review", []):
+            description = nr.get("description", "")
+            if description in seen_review:
+                continue
+            seen_review.add(description)
+            related = nr.get("related_node_ids") or []
+            suffix = f"  (related: {', '.join(related)})" if related else ""
+            lines.append(f"  [needs_review] {description}{suffix}")
+        for ms in envelope.get("merge_suggestions", []):
+            key = tuple(sorted((ms.get("node_id_a", ""), ms.get("node_id_b", ""))))
+            if key in seen_merge:
+                continue
+            seen_merge.add(key)
+            reason = ms.get("reason")
+            suffix = f": {reason}" if reason else ""
+            lines.append(f"  [merge_suggestion] {ms.get('node_id_a')} ~ {ms.get('node_id_b')}{suffix}")
+
+    return lines
 
 
 def _render_tree(

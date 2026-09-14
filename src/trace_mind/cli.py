@@ -311,8 +311,13 @@ def map_(
 ):
     """Print the whole project's decision graph as a horizontal ASCII tree,
     with the most-recently-touched node highlighted -- the fast, no-file
-    alternative to `graph export --html`/`--png`. Meant to be run from a
-    slash command / skill; see integrations/README.md.
+    alternative to `graph export --html`/`--png`. Also prints a "You are
+    here: <root> -> ... -> <node>" breadcrumb above the tree, and an
+    "(open loops)" section below it (parked `revisit_condition` nodes plus
+    any `needs_review`/`merge_suggestions` an extraction run declined to
+    auto-apply) -- the two things worth seeing before scanning the whole
+    tree. Meant to be run from a slash command / skill; see
+    integrations/README.md.
     """
     if color not in ("auto", "always", "never"):
         typer.echo("--color must be one of: auto, always, never", err=True)

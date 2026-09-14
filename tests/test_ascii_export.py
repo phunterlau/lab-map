@@ -1,3 +1,4 @@
+import json
 import time
 from pathlib import Path
 
@@ -24,6 +25,16 @@ def evidence(tmp_path):
     ).fetchone()["id"]
     yield conn, project_id, ev
     conn.close()
+
+
+def _tree_body(output: str) -> list[str]:
+    """Strip the leading "You are here: ..." breadcrumb + its blank line --
+    render_ascii always emits exactly those two lines first when there's at
+    least one node -- leaving the tree/unlinked/open-loops lines below."""
+    lines = output.splitlines()
+    assert lines[0].startswith("You are here:")
+    assert lines[1] == ""
+    return lines[2:]
 
 
 def _build_canonical_graph(conn, project_id, evidence_id):
@@ -65,7 +76,7 @@ def test_goal_is_root_and_options_are_children(evidence):
     _build_canonical_graph(conn, project_id, ev)
 
     output = ascii_export.render_ascii(conn, project_id, use_color=False)
-    lines = output.splitlines()
+    lines = _tree_body(output)
 
     assert lines[0].startswith("Q-0001 [goal/exploring]")
     option_lines = [l for l in lines if "[option/" in l]
@@ -154,9 +165,10 @@ def test_unlinked_node_appears_under_heading(evidence):
     )
 
     output = ascii_export.render_ascii(conn, project_id, use_color=False)
-    assert ascii_export.UNLINKED_HEADING in output
-    heading_index = output.splitlines().index(ascii_export.UNLINKED_HEADING)
-    stray_index = next(i for i, l in enumerate(output.splitlines()) if "O-9999" in l)
+    lines = _tree_body(output)
+    assert ascii_export.UNLINKED_HEADING in lines
+    heading_index = lines.index(ascii_export.UNLINKED_HEADING)
+    stray_index = next(i for i, l in enumerate(lines) if "O-9999" in l)
     assert stray_index > heading_index
 
 
@@ -199,11 +211,11 @@ def test_deep_tree_indentation_is_structurally_correct(evidence):
     graph_repo.add_edge(conn, project_id, "A1", "A1x", "EXPLORES", evidence_event_ids=[ev])
 
     output = ascii_export.render_ascii(conn, project_id, use_color=False)
-    lines = output.splitlines()
+    lines = _tree_body(output)
     # Parse assumes a single-token node id before "[" -- true for this
     # test's ids (A, B, A1, ...) but would break on a realistic id
     # containing a space or literal "[".
-    by_content = {l.split("[")[0].strip().split()[-1]: l for l in lines}
+    by_content = {l.split("[")[0].strip().split()[-1]: l for l in lines if "[" in l}
     # A is not-last among Q-0001's children (B follows) -> its subtree keeps
     # a continuing bar; B is last -> no bar under it.
     assert by_content["A"].startswith("├── A")
@@ -214,6 +226,119 @@ def test_deep_tree_indentation_is_structurally_correct(evidence):
     # continues into its children's prefix too: "│   " (from A) + "│   "
     # (from A1) + "└── " (A1x is A1's only, thus last, child).
     assert by_content["A1x"].startswith("│   │   └── A1x")
+
+
+def test_breadcrumb_shows_path_from_root_to_you_are_here(evidence):
+    conn, project_id, ev = evidence
+    _build_canonical_graph(conn, project_id, ev)
+    time.sleep(0.01)
+    graph_repo.add_node(
+        conn, project_id, "O-0002", "option", "Graphiti", status="dormant", evidence_event_ids=[ev],
+    )
+    output = ascii_export.render_ascii(conn, project_id, use_color=False)
+    assert output.splitlines()[0] == "You are here: Q-0001 → O-0002"
+
+
+def test_breadcrumb_shows_multi_hop_path(evidence):
+    conn, project_id, ev = evidence
+    graph_repo.add_node(conn, project_id, "Q-0001", "goal", "Root", status="exploring", evidence_event_ids=[ev])
+    graph_repo.add_node(conn, project_id, "A", "option", "A", status="open", evidence_event_ids=[ev])
+    graph_repo.add_node(conn, project_id, "A1", "option", "A1", status="open", evidence_event_ids=[ev])
+    graph_repo.add_edge(conn, project_id, "Q-0001", "A", "EXPLORES", evidence_event_ids=[ev])
+    graph_repo.add_edge(conn, project_id, "A", "A1", "EXPLORES", evidence_event_ids=[ev])
+
+    output = ascii_export.render_ascii(conn, project_id, use_color=False)
+    assert output.splitlines()[0] == "You are here: Q-0001 → A → A1"
+
+
+def test_breadcrumb_handles_you_are_here_in_unlinked_component(evidence):
+    conn, project_id, ev = evidence
+    graph_repo.add_node(conn, project_id, "Q-0001", "goal", "Root", status="exploring", evidence_event_ids=[ev])
+    time.sleep(0.01)
+    graph_repo.add_node(conn, project_id, "O-9999", "option", "Stray", status="open", evidence_event_ids=[ev])
+
+    output = ascii_export.render_ascii(conn, project_id, use_color=False)
+    assert output.splitlines()[0] == "You are here: O-9999"
+
+
+def test_open_loops_shows_parked_revisit_condition(evidence):
+    conn, project_id, ev = evidence
+    _build_canonical_graph(conn, project_id, ev)
+    graph_repo.add_node(
+        conn, project_id, "R-0001", "revisit_condition", "Revisit budget cap once k>10 lands",
+        status="open", evidence_event_ids=[ev],
+    )
+
+    output = ascii_export.render_ascii(conn, project_id, use_color=False)
+    assert ascii_export.OPEN_LOOPS_HEADING in output
+    assert "  [revisit_condition] R-0001: Revisit budget cap once k>10 lands" in output.splitlines()
+
+
+def test_open_loops_excludes_non_open_revisit_condition(evidence):
+    conn, project_id, ev = evidence
+    _build_canonical_graph(conn, project_id, ev)
+    graph_repo.add_node(
+        conn, project_id, "R-0001", "revisit_condition", "Already resolved",
+        status="superseded", evidence_event_ids=[ev],
+    )
+
+    output = ascii_export.render_ascii(conn, project_id, use_color=False)
+    # R-0001 legitimately appears elsewhere (it's the most-recently-touched
+    # node, so it's the breadcrumb/YOU ARE HERE target) -- only the
+    # open-loops listing itself must exclude it.
+    assert "[revisit_condition] R-0001" not in output
+    assert ascii_export.OPEN_LOOPS_HEADING not in output
+
+
+def test_open_loops_shows_needs_review_and_merge_suggestions_from_extraction_runs(evidence):
+    conn, project_id, ev = evidence
+    _build_canonical_graph(conn, project_id, ev)
+
+    session_id = conn.execute(
+        "SELECT session_id FROM normalized_events WHERE id = ?", (ev,)
+    ).fetchone()["session_id"]
+    output_json = json.dumps({
+        "needs_review": [
+            {"description": "Unclear if O-0004 was ever really considered", "related_node_ids": ["O-0004"]},
+        ],
+        "merge_suggestions": [
+            {"node_id_a": "O-0002", "node_id_b": "O-0004", "reason": "may be duplicates"},
+        ],
+    })
+    conn.execute(
+        "INSERT INTO extraction_runs (id, session_id, model, prompt_version, input_hash, output_json, status, created_at) "
+        "VALUES ('run-1', ?, 'gpt-5.6-luna', 'p1', 'hash-1', ?, 'applied', '2026-01-01T00:00:00Z')",
+        (session_id, output_json),
+    )
+    conn.commit()
+
+    output = ascii_export.render_ascii(conn, project_id, use_color=False)
+    assert ascii_export.OPEN_LOOPS_HEADING in output
+    assert "  [needs_review] Unclear if O-0004 was ever really considered  (related: O-0004)" in output.splitlines()
+    assert "  [merge_suggestion] O-0002 ~ O-0004: may be duplicates" in output.splitlines()
+
+
+def test_open_loops_ignores_extraction_runs_from_other_projects(evidence):
+    """An extraction run whose session never produced evidence for THIS
+    project's nodes must not leak into this project's open-loops section --
+    session_id alone isn't project-scoped in the schema, so the join through
+    provenance is load-bearing, not decorative."""
+    conn, project_id, ev = evidence
+    _build_canonical_graph(conn, project_id, ev)
+
+    output_json = json.dumps({
+        "needs_review": [{"description": "Belongs to a different project entirely"}],
+        "merge_suggestions": [],
+    })
+    conn.execute(
+        "INSERT INTO extraction_runs (id, session_id, model, prompt_version, input_hash, output_json, status, created_at) "
+        "VALUES ('run-2', 'some-unrelated-session', 'gpt-5.6-luna', 'p1', 'hash-2', ?, 'applied', '2026-01-01T00:00:00Z')",
+        (output_json,),
+    )
+    conn.commit()
+
+    output = ascii_export.render_ascii(conn, project_id, use_color=False)
+    assert "Belongs to a different project entirely" not in output
 
 
 def test_empty_project_renders_placeholder_message(evidence):
