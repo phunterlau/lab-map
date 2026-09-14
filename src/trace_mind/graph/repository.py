@@ -12,6 +12,8 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 
+from trace_mind.graph.models import EDGE_TYPES, NODE_STATUSES, NODE_TYPES
+
 
 class UnknownNodeError(ValueError):
     pass
@@ -19,6 +21,13 @@ class UnknownNodeError(ValueError):
 
 class MissingProvenanceError(ValueError):
     pass
+
+
+class InvalidOntologyError(ValueError):
+    """type_/status isn't in the bounded ontology (graph/models.py). Catching
+    this at write time, not at Markdown-render time, is the point: an
+    extractor (Milestone 5) that invents a node type should fail loudly
+    here rather than silently producing an unrenderable graph later."""
 
 
 def ensure_project(conn: sqlite3.Connection, root_path: str, name: str | None = None) -> str:
@@ -48,6 +57,11 @@ def add_node(
     extractor_version: str = "manual",
     allow_no_evidence: bool = False,
 ) -> None:
+    if type_ not in NODE_TYPES:
+        raise InvalidOntologyError(f"unknown node type {type_!r}; expected one of {sorted(NODE_TYPES)}")
+    if status not in NODE_STATUSES:
+        raise InvalidOntologyError(f"unknown node status {status!r}; expected one of {sorted(NODE_STATUSES)}")
+
     evidence_event_ids = evidence_event_ids or []
     if not evidence_event_ids and not allow_no_evidence:
         raise MissingProvenanceError(
@@ -88,6 +102,9 @@ def add_edge(
     extractor_version: str = "manual",
     allow_no_evidence: bool = False,
 ) -> str:
+    if type_ not in EDGE_TYPES:
+        raise InvalidOntologyError(f"unknown edge type {type_!r}; expected one of {sorted(EDGE_TYPES)}")
+
     for nid in (source_id, target_id):
         if get_node(conn, nid) is None:
             raise UnknownNodeError(f"edge references unknown node {nid!r}; create it first")

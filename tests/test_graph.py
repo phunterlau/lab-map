@@ -1,10 +1,11 @@
+from pathlib import Path
+
 import pytest
 
 from trace_mind.graph import repository as graph_repo
 from trace_mind.normalize.pipeline import ingest_session
 from trace_mind.storage.db import connect
 from trace_mind.transcripts.codex import CodexTranscriptAdapter
-from pathlib import Path
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CODEX_FIXTURE = FIXTURES / "codex" / "codex_research_memory_decision.jsonl"
@@ -103,6 +104,32 @@ def test_deciduous_style_goal_option_decision_graph(db_with_events):
         prov = graph_repo.provenance_for(db_with_events, "node", node["id"])
         assert len(prov) >= 1, f"{node['id']} has no provenance"
         assert prov[0]["byte_start"] is not None
+
+
+def test_add_node_rejects_unknown_type(db_with_events):
+    project_id = graph_repo.ensure_project(db_with_events, "/example/project")
+    evidence = _first_event_id(db_with_events, "user_message")
+    with pytest.raises(graph_repo.InvalidOntologyError):
+        graph_repo.add_node(
+            db_with_events, project_id, "X-0001", "not_a_real_type", "Something",
+            evidence_event_ids=[evidence],
+        )
+
+
+def test_add_edge_rejects_unknown_type(db_with_events):
+    project_id = graph_repo.ensure_project(db_with_events, "/example/project")
+    evidence = _first_event_id(db_with_events, "user_message")
+    graph_repo.add_node(
+        db_with_events, project_id, "O-0001", "option", "Graphiti", evidence_event_ids=[evidence]
+    )
+    graph_repo.add_node(
+        db_with_events, project_id, "O-0002", "option", "Markdown", evidence_event_ids=[evidence]
+    )
+    with pytest.raises(graph_repo.InvalidOntologyError):
+        graph_repo.add_edge(
+            db_with_events, project_id, "O-0001", "O-0002", "NOT_A_REAL_EDGE_TYPE",
+            evidence_event_ids=[evidence],
+        )
 
 
 def test_add_node_is_idempotent_upsert(db_with_events):

@@ -4,7 +4,7 @@ is high, but manual/CLI construction should stick to what's load-bearing
 now."""
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, get_args
 
 NodeType = Literal[
     "goal",
@@ -13,6 +13,7 @@ NodeType = Literal[
     "evidence",
     "experiment",
     "decision",
+    "action",
     "outcome",
     "revisit_condition",
 ]
@@ -44,3 +45,7 @@ EdgeType = Literal[
     "DERIVED_FROM",
     "RELATED_TO",
 ]
+
+NODE_TYPES = set(get_args(NodeType))
+NODE_STATUSES = set(get_args(NodeStatus))
+EDGE_TYPES = set(get_args(EdgeType))

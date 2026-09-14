@@ -14,10 +14,11 @@ the graph is interpreted state
 Markdown is the human-readable projection
 ```
 
-## What's built (build plan Milestones 0-3, one vertical slice)
+## What's built (build plan Milestones 0-4, one vertical slice)
 
 Real transcript file -> adapter -> `NormalizedEvent` -> SQLite -> cursor
-advance -> re-run is idempotent.
+advance -> re-run is idempotent -> manual graph (nodes/edges/provenance) ->
+`why <node>` walks decision -> evidence -> source session/turn/bytes.
 
 - `normalize/models.py` -- `NormalizedEvent`, provider-neutral. Nothing
   outside `transcripts/` touches raw Claude/Codex JSON.
@@ -27,20 +28,32 @@ advance -> re-run is idempotent.
   this machine -- not from docs, not copied into this repo).
 - `storage/db.py` -- SQLite schema. One deliberate deviation from the build
   plan's draft schema (section 9): `normalized_events` dedups on
-  `(session_id, byte_start, byte_end, event_index)`, not
-  `(session_id, content_hash)`. Two identical short messages in one session
-  ("yes" sent twice) would collide on content hash alone and the second
-  would silently vanish.
+  `(transcript_path, byte_start, byte_end, event_index)`, not
+  `(session_id, content_hash)`. `transcript_cursors` is keyed on
+  `(session_id, transcript_path)`, not `session_id` alone. The reason both
+  are keyed on the *physical file*, not the logical session, is a real bug
+  found against real data (below) -- one Codex `session_id` can span
+  multiple rollout files (a compaction rewrites the rollout under a new
+  filename but keeps the same `session_id`), and comparing/deduping across
+  two different files under one session_id is meaningless.
 - `normalize/pipeline.py` -- `ingest_session()`. Event insertion and cursor
   advancement happen in one SQLite transaction: a crash between them can't
   happen, so a re-run after a crash re-reads from the last *committed*
   offset and re-derives exactly the same events (verified in
-  `tests/test_idempotence.py`). Detects truncation/rotation by file-size
-  shrink or a changed leading-bytes hash and resets the cursor rather than
-  erroring.
-- `cli.py` -- `trace-mind <transcript> --provider claude|codex --session-id
-  <id> --db <path>`. Manual entry point for now; hooks and backfill will
-  call the same `ingest_session()`.
+  `tests/test_idempotence.py`). Detects truncation/rotation by comparing a
+  file against *its own* prior size/leading-bytes hash (never against a
+  different file) and resets only that file's cursor + rows.
+- `graph/models.py`, `graph/repository.py` -- MVP node/edge ontology (build
+  plan section 8) with enforced constraints: `add_node`/`add_edge` reject
+  unknown types/statuses (`InvalidOntologyError`), require at least one
+  real `evidence_event_id` pointing at an already-ingested
+  `normalized_events` row (`MissingProvenanceError`, override with
+  `allow_no_evidence` only for structural nodes), and reject edges to
+  nonexistent nodes (`UnknownNodeError`). Upserts by node/edge id.
+- `cli.py` -- `trace-mind ingest`, `node add/show`, `edge add`, `why`
+  (alias for `node show`: the decision -> evidence -> source-session
+  chain). Hooks and backfill will call the same `ingest_session()`/
+  `graph.repository` functions the CLI calls.
 - `tests/fixtures/{claude,codex}/` -- synthetic fixtures, not copied from
   any real session (copying real local transcript content into this repo
   was deliberately refused mid-build as a provenance risk -- see git log).
@@ -59,33 +72,49 @@ Making it a running count was an actual bug caught during this build:
 content hashes should also depend on it, but it must derive purely from
 where the bytes sit, not from how many events preceded it in a particular
 read -- otherwise identity (and therefore idempotent dedup) shifts depending
-on where a read happened to start. Chronological order within a session is
-`(byte_start, event_index)`, not `event_index` alone.
+on where a read happened to start. Chronological order within a session
+that spans one physical file is `(byte_start, event_index)`; across a
+multi-file session, order by `(session_id, timestamp)` instead.
+
+### Validated against real data
+
+With the user's explicit read-only authorization, ran the built pipeline
+against one of the user's own real, long-running (~1 month), multi-file
+Codex research sessions -- read directly from `~/.codex/sessions/...`,
+never copied into this repo, output written only to a scratch DB outside
+any git-tracked directory. Result: tens of thousands of normalized events
+across two physical rollout files under one logical session; a real
+multi-node/edge decision graph built from actual turns (a goal, a rejected
+early hypothesis with the external evidence that contradicted it, the
+pivot decision, follow-on experiment phases, a quantitative outcome, and a
+later action/decision pair), each node backed by a real event id and byte
+range; `trace-mind why <node>` correctly walked the chain including across
+the real compaction boundary between the two physical files. This run is
+what surfaced the multi-file cursor bug above. Specifics of that research
+project's content are intentionally not reproduced here.
 
 ## What's stubbed but not yet implemented
 
-`graph/`, `extraction/`, `provenance/`, `projection/`, `recall/`, `mcp/`,
-`hooks/` exist as empty packages. Graph/provenance *tables* exist in
-`storage/db.py` (section 9's schema) but nothing writes to them yet.
+`extraction/`, `provenance/` (only its table exists), `projection/`,
+`recall/`, `mcp/`, `hooks/` are empty packages.
 
 ## Next steps, in the order the build plan recommends (section 26)
 
-1. Milestone 4: manual graph CLI (`node add/show`, `edge add`) against the
-   existing `graph_nodes`/`graph_edges`/`provenance` tables -- exercise the
-   section 27 scenario by hand before automating extraction.
-2. Milestone 2: `hooks/` -- `SessionStart`/`Stop`/`PreCompact`/`SessionEnd`
+1. Milestone 2: `hooks/` -- `SessionStart`/`Stop`/`PreCompact`/`SessionEnd`
    entry points for Claude and Codex that enqueue into `hook_events` and
    call `ingest_session()`. Needs the user's sign-off before touching
    `~/.claude/settings.json` (global, shared across every session on this
    machine).
-3. Milestone 5: LLM graph-diff extraction -- needs a labeled corpus; out of
-   scope until 1-2 are solid. Extractor backend, per user direction: either
+2. Milestone 5: LLM graph-diff extraction -- needs a labeled corpus; out of
+   scope until 1 is solid. Extractor backend, per user direction: either
    shell out to Codex/Claude Code as a coding-agent task (i.e. give the
    agent native prompt access, not a raw API call), or call OpenAI's
    GPT-5.6-Luna directly via the `OPENAI_API_KEY` env var
    (https://developers.openai.com/api/docs/models/gpt-5.6-luna). Not an
    Anthropic API call.
-4. Milestones 6-9: Markdown projection, MCP recall, backfill, synthesis.
+3. Milestones 6-9: Markdown projection (`RESEARCH_MAP.md` -- the actual
+   human-facing deliverable; not yet built, deliberately, pending direction
+   on scope/output location), MCP recall, backfill, synthesis.
 
 ## Reference repos
 

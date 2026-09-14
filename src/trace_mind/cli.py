@@ -88,7 +88,7 @@ def node_add(
             summary=summary, status=status, confidence=confidence,
             evidence_event_ids=evidence, allow_no_evidence=allow_no_evidence,
         )
-    except (graph_repo.MissingProvenanceError, graph_repo.UnknownNodeError) as exc:
+    except (graph_repo.MissingProvenanceError, graph_repo.UnknownNodeError, graph_repo.InvalidOntologyError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1)
     finally:
@@ -96,37 +96,43 @@ def node_add(
     typer.echo(f"node {node_id} saved")
 
 
+def _print_node(conn, node_id: str) -> None:
+    """Shared by `node show` and `why` -- the decision -> evidence ->
+    source-session chain."""
+    node = graph_repo.get_node(conn, node_id)
+    if node is None:
+        typer.echo(f"no such node: {node_id}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"{node['id']} [{node['type']}] {node['title']}  (status={node['status']}, confidence={node['confidence']})")
+    if node["summary"]:
+        typer.echo(f"  {node['summary']}")
+
+    edges = graph_repo.edges_touching(conn, node_id)
+    if edges:
+        typer.echo("edges:")
+        for e in edges:
+            arrow = "->" if e["source_node_id"] == node_id else "<-"
+            other = e["target_node_id"] if e["source_node_id"] == node_id else e["source_node_id"]
+            typer.echo(f"  {arrow} {e['type']} {other}" + (f"  ({e['reason']})" if e["reason"] else ""))
+
+    prov = graph_repo.provenance_for(conn, "node", node_id)
+    if prov:
+        typer.echo("provenance:")
+        for p in prov:
+            excerpt = (p["event_text"] or "")[:100].replace("\n", " ")
+            typer.echo(
+                f"  session={p['event_session_id']} turn={p['turn_id']} "
+                f"bytes=[{p['byte_start']}:{p['byte_end']}] :: {excerpt}"
+            )
+
+
 @node_app.command("show")
 def node_show(node_id: str, db: DbOpt = DEFAULT_DB):
     """Show a node, its edges, and its provenance chain back to source events."""
     conn = connect(db)
     try:
-        node = graph_repo.get_node(conn, node_id)
-        if node is None:
-            typer.echo(f"no such node: {node_id}", err=True)
-            raise typer.Exit(1)
-
-        typer.echo(f"{node['id']} [{node['type']}] {node['title']}  (status={node['status']}, confidence={node['confidence']})")
-        if node["summary"]:
-            typer.echo(f"  {node['summary']}")
-
-        edges = graph_repo.edges_touching(conn, node_id)
-        if edges:
-            typer.echo("edges:")
-            for e in edges:
-                arrow = "->" if e["source_node_id"] == node_id else "<-"
-                other = e["target_node_id"] if e["source_node_id"] == node_id else e["source_node_id"]
-                typer.echo(f"  {arrow} {e['type']} {other}" + (f"  ({e['reason']})" if e["reason"] else ""))
-
-        prov = graph_repo.provenance_for(conn, "node", node_id)
-        if prov:
-            typer.echo("provenance:")
-            for p in prov:
-                excerpt = (p["event_text"] or "")[:100].replace("\n", " ")
-                typer.echo(
-                    f"  session={p['event_session_id']} turn={p['turn_id']} "
-                    f"bytes=[{p['byte_start']}:{p['byte_end']}] :: {excerpt}"
-                )
+        _print_node(conn, node_id)
     finally:
         conn.close()
 
@@ -152,7 +158,7 @@ def edge_add(
             reason=reason, confidence=confidence,
             evidence_event_ids=evidence, allow_no_evidence=allow_no_evidence,
         )
-    except (graph_repo.MissingProvenanceError, graph_repo.UnknownNodeError) as exc:
+    except (graph_repo.MissingProvenanceError, graph_repo.UnknownNodeError, graph_repo.InvalidOntologyError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1)
     finally:
@@ -163,7 +169,11 @@ def edge_add(
 @app.command()
 def why(node_id: str, db: DbOpt = DEFAULT_DB):
     """Alias for `node show` -- the decision -> evidence -> source-session chain."""
-    node_show(node_id, db=db)
+    conn = connect(db)
+    try:
+        _print_node(conn, node_id)
+    finally:
+        conn.close()
 
 
 def main() -> None:
