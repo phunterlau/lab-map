@@ -15,6 +15,7 @@ import typer
 
 from trace_mind.graph import repository as graph_repo
 from trace_mind.normalize.pipeline import ingest_session
+from trace_mind.projection import graphviz_export
 from trace_mind.storage.db import connect
 from trace_mind.transcripts.claude import ClaudeTranscriptAdapter
 from trace_mind.transcripts.codex import CodexTranscriptAdapter
@@ -22,8 +23,10 @@ from trace_mind.transcripts.codex import CodexTranscriptAdapter
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 node_app = typer.Typer(add_completion=False, no_args_is_help=True, help="Manage graph nodes.")
 edge_app = typer.Typer(add_completion=False, no_args_is_help=True, help="Manage graph edges.")
+graph_app = typer.Typer(add_completion=False, no_args_is_help=True, help="Inspect/export the graph.")
 app.add_typer(node_app, name="node")
 app.add_typer(edge_app, name="edge")
+app.add_typer(graph_app, name="graph")
 
 ADAPTERS = {
     "claude": ClaudeTranscriptAdapter(),
@@ -164,6 +167,26 @@ def edge_add(
     finally:
         conn.close()
     typer.echo(f"edge {edge_id} saved")
+
+
+@graph_app.command("export")
+def graph_export(
+    project_root: ProjectRootOpt = ".",
+    out: Annotated[Path, typer.Option(help="Output file path")] = Path("research-map.dot"),
+    png: Annotated[bool, typer.Option(help="Render PNG via the system `dot` binary instead of writing .dot")] = False,
+    db: DbOpt = DEFAULT_DB,
+):
+    """Export the graph as Graphviz DOT (or PNG, with --png)."""
+    conn = connect(db)
+    try:
+        project_id = graph_repo.ensure_project(conn, project_root)
+        if png:
+            graphviz_export.render_png(conn, project_id, out)
+        else:
+            out.write_text(graphviz_export.render_dot(conn, project_id))
+    finally:
+        conn.close()
+    typer.echo(f"wrote {out}")
 
 
 @app.command()
