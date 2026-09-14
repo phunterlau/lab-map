@@ -36,6 +36,17 @@ _STATUS_ANSI = {
 }
 _RESET = "\x1b[0m"
 _YOU_ARE_HERE_STYLE = "\x1b[1;7m"  # bold + reverse video
+_ID_STYLE = "\x1b[1;36m"  # bold cyan, fixed regardless of status -- a stable
+# color independent of node state, so the id token looks the same on every
+# line and is easy to spot/select/copy-paste regardless of that node's status.
+_DIM = "\x1b[2m"
+
+# "Branch" children -- types that represent a genuine fork/alternative, for
+# the per-parent "(N branches, M finished)" summary. Support/detail types
+# (evidence, outcome, action, revisit_condition) attach to a branch but
+# aren't one themselves, so they're excluded from the count on purpose.
+_BRANCH_NODE_TYPES = {"option", "decision", "hypothesis", "experiment"}
+_FINISHED_STATUSES = {"chosen", "rejected", "completed", "superseded"}
 
 UNLINKED_HEADING = "(unlinked)"
 OPEN_LOOPS_HEADING = "(open loops)"
@@ -238,8 +249,24 @@ def _render_tree(
     edge: _Edge | None = None,
 ) -> None:
     node = by_id[node_id]
-    label = _format_node_label(node, edge, node_id, use_color=use_color)
     is_here = node_id == you_are_here
+
+    children = sorted(
+        (child_id for child_id, (parent_id, _e) in parent_of.items() if parent_id == node_id),
+        key=lambda cid: by_id[cid]["created_at"],
+    )
+    # Deterministic, not LLM-estimated: branch count and finished count are
+    # exact facts already in the graph (child type + status), so counting
+    # them is instant, free, and can't hallucinate -- an LLM call here would
+    # be slower and less accurate than just counting, and `map` is meant to
+    # be the fast, no-API-call view (see docs/architecture.md).
+    branch_children = [cid for cid in children if by_id[cid]["type"] in _BRANCH_NODE_TYPES]
+    branch_summary = None
+    if branch_children:
+        finished = sum(1 for cid in branch_children if by_id[cid]["status"] in _FINISHED_STATUSES)
+        noun = "branch" if len(branch_children) == 1 else "branches"
+        branch_summary = f"{len(branch_children)} {noun}, {finished} finished"
+
     # `prefix` is this node's own ancestor continuation bars (NOT including
     # its own connector); `connector` is this node's own "├── "/"└── "/"".
     # These must stay separate -- the prefix used for a node's OWN line and
@@ -247,11 +274,22 @@ def _render_tree(
     # (the latter extends the former based on *this* node's position, not
     # each child's), conflating them was a real bug caught by manually
     # inspecting real rendered output against real data (see git log).
-    line = f"{prefix}{connector}{label}"
+    #
+    # The YOU ARE HERE line is always built from the PLAIN (uncolored) label
+    # and wrapped in a single outer bold+reverse span. Building it from the
+    # colored label instead would embed that label's own mid-string reset
+    # codes, which -- since ANSI SGR state isn't scoped/nested, a `\x1b[0m`
+    # cancels ALL active styling -- would cut the outer bold+reverse off
+    # partway through the line instead of covering it, a real bug only
+    # visible in actual rendered output, not in plain-text-only tests.
     if is_here:
-        line += " ◀── YOU ARE HERE"
+        label = _format_node_label(node, edge, node_id, branch_summary, use_color=False)
+        line = f"{prefix}{connector}{label} ◀── YOU ARE HERE"
         if use_color:
             line = f"{_YOU_ARE_HERE_STYLE}{line}{_RESET}"
+    else:
+        label = _format_node_label(node, edge, node_id, branch_summary, use_color=use_color)
+        line = f"{prefix}{connector}{label}"
     lines.append(line)
 
     # Base prefix for this node's children: extend `prefix` by whether THIS
@@ -263,10 +301,6 @@ def _render_tree(
     else:
         children_base_prefix = prefix + "│   "
 
-    children = sorted(
-        (child_id for child_id, (parent_id, _e) in parent_of.items() if parent_id == node_id),
-        key=lambda cid: by_id[cid]["created_at"],
-    )
     for i, child_id in enumerate(children):
         is_last = i == len(children) - 1
         child_connector = "└── " if is_last else "├── "
@@ -277,8 +311,21 @@ def _render_tree(
         )
 
 
-def _format_node_label(node: sqlite3.Row, edge: _Edge | None, node_id: str, *, use_color: bool) -> str:
-    text = f"{node['id']} [{node['type']}/{node['status']}] {node['title']}"
+def _format_node_label(
+    node: sqlite3.Row, edge: _Edge | None, node_id: str, branch_summary: str | None, *, use_color: bool
+) -> str:
+    """Id and type/status are each their own bracketed `[...]` tag -- always,
+    even with color off -- so either token has a clean boundary to
+    double-click/drag-select and copy, instead of running straight into
+    adjacent text. With color on, each tag gets its own span rather than one
+    color for the whole line: the id is a fixed color independent of status
+    (a stable, recognizable copy target), the type/status tag carries the
+    actual status color (it's literally what's stating the status), and the
+    title stays uncolored for readability against every status color."""
+    id_tag = f"[{node['id']}]"
+    type_tag = f"[{node['type']}/{node['status']}]"
+
+    annotation = ""
     if edge is not None:
         # Annotate with the edge's REAL declared direction relative to the
         # parent one line up in the tree, regardless of which way the BFS
@@ -292,12 +339,15 @@ def _format_node_label(node: sqlite3.Row, edge: _Edge | None, node_id: str, *, u
             # This node is the edge's declared target -> it points from
             # the parent into this node.
             annotation = f"  (◀─{edge.type}─ from parent)"
-        text += annotation
+
+    branch_tag = f"  {{{branch_summary}}}" if branch_summary else ""
 
     if not use_color:
-        return text
+        return f"{id_tag} {type_tag} {node['title']}{annotation}{branch_tag}"
 
+    colored_id = f"{_ID_STYLE}{id_tag}{_RESET}"
     color = _STATUS_ANSI.get(node["status"])
-    if color is None:
-        return text
-    return f"\x1b[{color}m{text}{_RESET}"
+    colored_type = f"\x1b[{color}m{type_tag}{_RESET}" if color else type_tag
+    colored_annotation = f"{_DIM}{annotation}{_RESET}" if annotation else ""
+    colored_branch = f"{_DIM}{branch_tag}{_RESET}" if branch_tag else ""
+    return f"{colored_id} {colored_type} {node['title']}{colored_annotation}{colored_branch}"

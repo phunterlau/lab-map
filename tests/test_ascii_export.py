@@ -78,7 +78,7 @@ def test_goal_is_root_and_options_are_children(evidence):
     output = ascii_export.render_ascii(conn, project_id, use_color=False)
     lines = _tree_body(output)
 
-    assert lines[0].startswith("Q-0001 [goal/exploring]")
+    assert lines[0].startswith("[Q-0001] [goal/exploring]")
     option_lines = [l for l in lines if "[option/" in l]
     assert len(option_lines) == 3
     for l in option_lines:
@@ -139,6 +139,89 @@ def test_exactly_one_you_are_here_on_most_recently_updated_node(evidence):
     here_lines = [l for l in output.splitlines() if "YOU ARE HERE" in l]
     assert len(here_lines) == 1
     assert "O-0002" in here_lines[0]
+
+
+def test_you_are_here_line_stays_styled_through_to_the_suffix(evidence):
+    """Regression: the id/type-status tags each carry their own ANSI span
+    ending in a reset. Building the YOU ARE HERE line by wrapping a label
+    that already contains those embedded resets would cancel the outer
+    bold+reverse partway through (SGR state isn't scoped -- \\x1b[0m clears
+    ALL active styling, so a later code doesn't "resume"), leaving the
+    " <- YOU ARE HERE" suffix and everything after the label's own reset
+    rendered in default style instead of highlighted. There must be no
+    reset code before the final one that closes the whole line."""
+    conn, project_id, ev = evidence
+    _build_canonical_graph(conn, project_id, ev)
+    time.sleep(0.01)
+    graph_repo.add_node(
+        conn, project_id, "O-0002", "option", "Graphiti", status="dormant", evidence_event_ids=[ev],
+    )
+
+    output = ascii_export.render_ascii(conn, project_id, use_color=True)
+    here_line = next(l for l in output.splitlines() if "YOU ARE HERE" in l)
+    assert here_line.startswith(ascii_export._YOU_ARE_HERE_STYLE)
+    assert here_line.count(ascii_export._RESET) == 1
+    assert here_line.endswith(ascii_export._RESET)
+
+
+def test_id_and_type_tags_are_always_bracketed_for_easy_selection(evidence):
+    conn, project_id, ev = evidence
+    _build_canonical_graph(conn, project_id, ev)
+
+    for use_color in (False, True):
+        output = ascii_export.render_ascii(conn, project_id, use_color=use_color)
+        assert "[Q-0001]" in output
+        assert "[goal/exploring]" in output
+        assert "[O-0003]" in output
+        assert "[option/chosen]" in output
+
+
+def test_id_tag_and_status_tag_get_independent_color_spans(evidence):
+    """The id tag uses a fixed color regardless of status; the type/status
+    tag carries the status color. They must not share one span -- otherwise
+    changing a node's status would also silently change the id's color."""
+    conn, project_id, ev = evidence
+    graph_repo.add_node(
+        conn, project_id, "O-0001", "option", "Rejected option", status="rejected", evidence_event_ids=[ev],
+    )
+    # A second, later node so O-0001 is NOT "YOU ARE HERE" -- that line is
+    # deliberately built from the plain (uncolored) label (see the
+    # you-are-here regression test above), so it wouldn't exercise the
+    # per-tag color spans this test is checking.
+    time.sleep(0.01)
+    graph_repo.add_node(
+        conn, project_id, "O-0002", "option", "Later option", status="open", evidence_event_ids=[ev],
+    )
+
+    output = ascii_export.render_ascii(conn, project_id, use_color=True)
+    line = next(l for l in output.splitlines() if "O-0001" in l)
+    assert f"{ascii_export._ID_STYLE}[O-0001]{ascii_export._RESET}" in line
+    status_color = ascii_export._STATUS_ANSI["rejected"]
+    assert f"\x1b[{status_color}m[option/rejected]{ascii_export._RESET}" in line
+
+
+def test_branch_summary_counts_only_branch_types_and_finished_statuses(evidence):
+    conn, project_id, ev = evidence
+    _build_canonical_graph(conn, project_id, ev)
+    # _build_canonical_graph's Q-0001 has 3 option children: O-0002 (dormant),
+    # O-0003 (chosen), O-0004 (dormant) -- 3 branches, 1 finished.
+
+    output = ascii_export.render_ascii(conn, project_id, use_color=False)
+    root_line = next(l for l in output.splitlines() if l.startswith("[Q-0001]"))
+    assert "{3 branches, 1 finished}" in root_line
+
+
+def test_branch_summary_absent_when_all_children_are_support_types(evidence):
+    conn, project_id, ev = evidence
+    graph_repo.add_node(conn, project_id, "Q-0001", "goal", "Root", status="exploring", evidence_event_ids=[ev])
+    graph_repo.add_node(
+        conn, project_id, "E-0002", "evidence", "Supporting evidence", status="completed", evidence_event_ids=[ev],
+    )
+    graph_repo.add_edge(conn, project_id, "Q-0001", "E-0002", "TESTS", evidence_event_ids=[ev])
+
+    output = ascii_export.render_ascii(conn, project_id, use_color=False)
+    root_line = next(l for l in output.splitlines() if l.startswith("[Q-0001]"))
+    assert "branches" not in root_line
 
 
 def test_color_mode_adds_ansi_escapes_only_when_requested(evidence):
@@ -212,20 +295,19 @@ def test_deep_tree_indentation_is_structurally_correct(evidence):
 
     output = ascii_export.render_ascii(conn, project_id, use_color=False)
     lines = _tree_body(output)
-    # Parse assumes a single-token node id before "[" -- true for this
-    # test's ids (A, B, A1, ...) but would break on a realistic id
-    # containing a space or literal "[".
-    by_content = {l.split("[")[0].strip().split()[-1]: l for l in lines if "[" in l}
+    # The node id is the first bracketed "[...]" token on the line -- true
+    # regardless of id content, since ids never contain "[" or "]".
+    by_content = {l.split("[", 1)[1].split("]", 1)[0]: l for l in lines if "[" in l}
     # A is not-last among Q-0001's children (B follows) -> its subtree keeps
     # a continuing bar; B is last -> no bar under it.
-    assert by_content["A"].startswith("├── A")
-    assert by_content["B"].startswith("└── B")
-    assert by_content["A1"].startswith("│   ├── A1")
-    assert by_content["A2"].startswith("│   └── A2")
+    assert by_content["A"].startswith("├── [A]")
+    assert by_content["B"].startswith("└── [B]")
+    assert by_content["A1"].startswith("│   ├── [A1]")
+    assert by_content["A2"].startswith("│   └── [A2]")
     # A1 is NOT last among A's children (A2 follows), so A1's own bar
     # continues into its children's prefix too: "│   " (from A) + "│   "
     # (from A1) + "└── " (A1x is A1's only, thus last, child).
-    assert by_content["A1x"].startswith("│   │   └── A1x")
+    assert by_content["A1x"].startswith("│   │   └── [A1x]")
 
 
 def test_breadcrumb_shows_path_from_root_to_you_are_here(evidence):
