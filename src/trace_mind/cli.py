@@ -18,7 +18,7 @@ import typer
 from trace_mind.graph import repository as graph_repo
 from trace_mind.hooks import codex as codex_hooks
 from trace_mind.normalize.pipeline import ingest_session
-from trace_mind.projection import graphviz_export
+from trace_mind.projection import graphviz_export, html_export
 from trace_mind.storage.db import connect
 from trace_mind.transcripts.claude import ClaudeTranscriptAdapter
 from trace_mind.transcripts.codex import CodexTranscriptAdapter
@@ -206,14 +206,21 @@ def graph_export(
     project_root: ProjectRootOpt = ".",
     out: Annotated[Path, typer.Option(help="Output file path")] = Path("research-map.dot"),
     png: Annotated[bool, typer.Option(help="Render PNG via the system `dot` binary instead of writing .dot")] = False,
+    html: Annotated[bool, typer.Option(help="Render a self-contained interactive HTML viewer instead of .dot")] = False,
     db: DbOpt = DEFAULT_DB,
 ):
-    """Export the graph as Graphviz DOT (or PNG, with --png)."""
+    """Export the graph as Graphviz DOT, PNG (--png), or an interactive HTML viewer (--html)."""
+    if png and html:
+        typer.echo("pass only one of --png / --html", err=True)
+        raise typer.Exit(1)
+
     conn = connect(db)
     try:
         project_id = graph_repo.ensure_project(conn, project_root)
         if png:
             graphviz_export.render_png(conn, project_id, out)
+        elif html:
+            out.write_text(html_export.render_html(conn, project_id))
         else:
             out.write_text(graphviz_export.render_dot(conn, project_id))
     finally:

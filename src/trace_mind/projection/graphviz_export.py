@@ -64,14 +64,34 @@ def render_dot(conn: sqlite3.Connection, project_id: str) -> str:
 
 
 def render_png(conn: sqlite3.Connection, project_id: str, out_path: Path) -> None:
-    dot_source = render_dot(conn, project_id)
-    result = subprocess.run(
-        ["dot", "-Tpng", "-o", str(out_path)],
-        input=dot_source.encode("utf-8"),
-        capture_output=True,
-    )
+    out_path.write_bytes(_run_dot(render_dot(conn, project_id), "png"))
+
+
+def render_svg(conn: sqlite3.Connection, project_id: str) -> str:
+    """SVG, not PNG: Graphviz gives every node a
+    `<g class="node"><title>NODE_ID</title>...` element, where NODE_ID is
+    exactly the graph_nodes.id string used as the DOT node name above --
+    so the output is naturally addressable by node id from JS, which is
+    what the interactive HTML viewer (projection/html_export.py) needs.
+    """
+    return _run_dot(render_dot(conn, project_id), "svg").decode("utf-8")
+
+
+def _run_dot(dot_source: str, fmt: str) -> bytes:
+    try:
+        result = subprocess.run(
+            ["dot", f"-T{fmt}"],
+            input=dot_source.encode("utf-8"),
+            capture_output=True,
+        )
+    except FileNotFoundError:
+        raise RuntimeError(
+            "the `dot` binary (Graphviz) was not found on PATH -- install it, "
+            "e.g. `brew install graphviz` on macOS"
+        ) from None
     if result.returncode != 0:
         raise RuntimeError(f"dot failed: {result.stderr.decode('utf-8', errors='replace')}")
+    return result.stdout
 
 
 def _escape(text: str) -> str:

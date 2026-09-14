@@ -76,8 +76,19 @@ hooks are not wired yet ("hooks to codex for now").
   the user's call, same as the existing note about `~/.claude/settings.json`
   below).
 - `projection/graphviz_export.py` -- `graph_nodes`/`graph_edges` -> DOT,
-  optionally rendered to PNG via the system `dot` binary (no new Python
-  dependency). Used to visualize the real-session graph below.
+  rendered to PNG or SVG via the system `dot` binary (no new Python
+  dependency; raises a clear `RuntimeError` pointing at `brew install
+  graphviz` if `dot` isn't on PATH). Used to visualize the real-session
+  graph below.
+- `projection/html_export.py` -- `trace-mind graph export --html`: one
+  self-contained HTML file (inline SVG + a JSON blob of node
+  details/edges/provenance + ~150 lines of vanilla JS for pan/zoom and
+  click-to-inspect). No server, no CDN, no bundler -- opens directly via a
+  `file://` URL, fully offline. Clicking a node shows the same
+  title/summary/status/edges/provenance that `trace-mind why <node>`
+  prints on the CLI, one hop only (not a recursive ancestor walk).
+  `dev/render_demo_graph.py` regenerates `assets/demo-graph.html` alongside
+  the PNG.
 - `tests/fixtures/{claude,codex}/` -- synthetic fixtures, not copied from
   any real session (copying real local transcript content into this repo
   was deliberately refused mid-build as a provenance risk -- see git log).
@@ -160,8 +171,11 @@ anywhere else.
 ## What's stubbed but not yet implemented
 
 `extraction/`, `provenance/` (only its table exists), `recall/`, `mcp/`,
-and the Claude Code half of `hooks/` are not built. `projection/` has only
-the Graphviz exporter -- no `RESEARCH_MAP.md` Markdown projection yet.
+and the Claude Code half of `hooks/` are not built. `projection/` covers
+the *graph* projection (DOT/PNG/interactive HTML) -- the narrative
+`RESEARCH_MAP.md` Markdown projection (build plan section 17) is still not
+built; that's a different, text-first view (active questions, branches,
+rejected/dormant callouts) that the graph viewer doesn't replace.
 
 ## Next steps, in the order the build plan recommends (section 26)
 

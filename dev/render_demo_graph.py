@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate assets/demo-graph.png from the synthetic test fixtures.
+"""Regenerate assets/demo-graph.{png,html} from the synthetic test fixtures.
 
 Builds the build plan's own canonical scenario (section 27: Graphiti vs.
 Markdown vs. Postgres for persistent research memory) as a real graph
@@ -14,13 +14,14 @@ from pathlib import Path
 
 from trace_mind.graph import repository as graph_repo
 from trace_mind.normalize.pipeline import ingest_session
-from trace_mind.projection import graphviz_export
+from trace_mind.projection import graphviz_export, html_export
 from trace_mind.storage.db import connect
 from trace_mind.transcripts.codex import CodexTranscriptAdapter
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "codex" / "codex_research_memory_decision.jsonl"
-OUT_PATH = REPO_ROOT / "assets" / "demo-graph.png"
+PNG_OUT_PATH = REPO_ROOT / "assets" / "demo-graph.png"
+HTML_OUT_PATH = REPO_ROOT / "assets" / "demo-graph.html"
 SESSION_ID = "01a0aaaa-0000-7000-8000-000000000001"
 PROJECT_ROOT = "demo-project"
 
@@ -74,11 +75,13 @@ def main() -> None:
         )
         graph_repo.add_edge(conn, project_id, "R-0006", "O-0002", "REVISIT_WHEN", evidence_event_ids=[goal_evidence])
 
-        OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        graphviz_export.render_png(conn, project_id, OUT_PATH)
+        PNG_OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        graphviz_export.render_png(conn, project_id, PNG_OUT_PATH)
+        HTML_OUT_PATH.write_text(html_export.render_html(conn, project_id))
         conn.close()
 
-    print(f"wrote {OUT_PATH}")
+    print(f"wrote {PNG_OUT_PATH}")
+    print(f"wrote {HTML_OUT_PATH}")
 
 
 def _event_id(conn, text_snippet: str) -> str:
