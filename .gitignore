@@ -1,0 +1,19 @@
+# Reference repos: cloned for architectural study only, never vendored.
+# The frozen commit/origin snapshot IS committed -- everything else isn't.
+/reference/*
+!/reference/REFERENCES.lock
+!/reference/REFERENCES.urls
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# Per-project generated state (regenerable from the DB)
+.trace-mind/research.db
+.trace-mind/research.db-*
+
+# OS
+.DS_Store
