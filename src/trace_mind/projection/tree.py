@@ -21,8 +21,17 @@ import json
 import sqlite3
 from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from trace_mind.graph import repository as graph_repo
+
+# "Branch" node types -- a genuine fork/alternative, as opposed to a
+# support/detail type (evidence, outcome, action, revisit_condition) that
+# attaches to a branch but isn't one itself. Shared by ascii_export.py's
+# per-parent "(N branches, M finished)" summary and tree.py's own
+# unresolved-sibling finding (both need the same notion of "branch").
+BRANCH_NODE_TYPES = {"option", "decision", "hypothesis", "experiment"}
+FINISHED_STATUSES = {"chosen", "rejected", "completed", "superseded"}
 
 
 @dataclass
@@ -46,6 +55,11 @@ class TreeResult:
     # Same shape, for anything no goal-rooted BFS ever reached.
     unlinked_forest: list[tuple[str, ParentOf]] = field(default_factory=list)
     you_are_here: str | None = None
+    # node_id -> a real-world ISO timestamp to *display* at that node: its
+    # latest evidence event's actual transcript time if it has provenance,
+    # else its own graph row's updated_at. See _evidence_timestamps' own
+    # docstring for why evidence is preferred when available.
+    node_timestamp: dict[str, str] = field(default_factory=dict)
 
 
 def build_forest(conn: sqlite3.Connection, project_id: str) -> TreeResult:
@@ -76,7 +90,22 @@ def build_forest(conn: sqlite3.Connection, project_id: str) -> TreeResult:
             # a synthesized one.
             adjacency[e.target].append(e)
 
-    you_are_here = max(nodes, key=lambda n: n["updated_at"])["id"]
+    evidence_ts = _evidence_timestamps(conn, nodes)
+    # Evidence timestamp first, updated_at only as a fallback for nodes
+    # with no evidence at all -- NOT the reverse. Turns out `updated_at`
+    # isn't the reliable primary signal it looks like: two graph_nodes rows
+    # written moments apart in the same Python loop (a batch build script,
+    # or one extraction run applying several mutations) get DIFFERENT
+    # microsecond-precision updated_at values ordered by *write order*, not
+    # by anything about the underlying conversation. Confirmed on the real
+    # local/kgw-example DB: R-KGW-SIGN and O-KGW-DP's updated_at values
+    # aren't a tie at all (differ by ~5ms, in build.py's node-list order),
+    # so a plain max(updated_at) picked O-KGW-DP even though R-KGW-SIGN's
+    # real evidence event is chronologically a full day later. Evidence
+    # timestamp doesn't have this problem: it's the original transcript
+    # event time, which only changes when a node is genuinely re-cited.
+    node_timestamp = {n["id"]: evidence_ts.get(n["id"]) or n["updated_at"] for n in nodes}
+    you_are_here = max(nodes, key=lambda n: node_timestamp[n["id"]])["id"]
 
     visited: set[str] = set()
 
@@ -117,7 +146,79 @@ def build_forest(conn: sqlite3.Connection, project_id: str) -> TreeResult:
 
     return TreeResult(
         nodes=nodes, by_id=by_id, forest=forest, unlinked_forest=unlinked_forest, you_are_here=you_are_here,
+        node_timestamp=node_timestamp,
     )
+
+
+def _evidence_timestamps(conn: sqlite3.Connection, nodes: list[sqlite3.Row]) -> dict[str, str | None]:
+    """Each node's latest evidence event's real transcript timestamp
+    (`normalized_events.timestamp`), where it has any provenance at all.
+    Used in preference to `graph_nodes.updated_at` for both YOU-ARE-HERE
+    and each node's displayed age: `updated_at` is only ever a *write*
+    time, ordered by whatever order the writing code happened to touch
+    rows in -- which, inside one script run or one extraction transaction,
+    can be microseconds apart and completely unrelated to real
+    conversation recency. `normalized_events.timestamp` is the original
+    transcript event time, which only changes when a node is genuinely
+    re-cited, and (per storage/db.py's own schema comment) is the only
+    ordering valid *across* transcript files, unlike raw byte_start. Found
+    via a real case: local/kgw-example's R-KGW-SIGN and O-KGW-DP's
+    updated_at values differ by ~5ms -- not a tie, just build.py's Python
+    loop insertion order -- so a plain max(updated_at) silently favored
+    O-KGW-DP even though R-KGW-SIGN's real evidence event is a full day
+    later."""
+    node_ids = [n["id"] for n in nodes]
+    placeholders = ",".join("?" * len(node_ids))
+    rows = conn.execute(
+        f"""
+        SELECT p.object_id, MAX(ne.timestamp) AS latest_ts
+        FROM provenance p
+        JOIN normalized_events ne ON ne.id = p.normalized_event_id
+        WHERE p.object_type = 'node' AND p.object_id IN ({placeholders}) AND ne.timestamp IS NOT NULL
+        GROUP BY p.object_id
+        """,
+        node_ids,
+    ).fetchall()
+    return {r["object_id"]: r["latest_ts"] for r in rows}
+
+
+def format_relative_age(iso_ts: str | None, *, now: datetime | None = None) -> str | None:
+    """Brief, human relative age ("3d ago", "2h ago") for one of
+    TreeResult.node_timestamp's real-world ISO timestamps -- lets staleness
+    be read at a glance instead of requiring the viewer to do date
+    arithmetic on a raw timestamp themselves. Single coarsest unit, not a
+    breakdown (matches the "brief" ask -- "3d ago" not "3 days, 4 hours, 12
+    minutes ago"). Returns None for a missing/unparseable timestamp (a
+    structural node written with allow_no_evidence, or legacy data) so
+    callers can omit the tag entirely instead of showing "None ago"."""
+    if not iso_ts:
+        return None
+    try:
+        ts = datetime.fromisoformat(iso_ts)
+    except ValueError:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+
+    now = now or datetime.now(timezone.utc)
+    seconds = max((now - ts).total_seconds(), 0)
+
+    if seconds < 60:
+        return "just now"
+    minutes = seconds / 60
+    if minutes < 60:
+        return f"{int(minutes)}m ago"
+    hours = minutes / 60
+    if hours < 24:
+        return f"{int(hours)}h ago"
+    days = hours / 24
+    if days < 30:
+        return f"{int(days)}d ago"
+    months = days / 30
+    if months < 12:
+        return f"{int(months)}mo ago"
+    years = days / 365
+    return f"{int(years)}y ago"
 
 
 def sorted_children(tree: TreeResult, parent_of: ParentOf, node_id: str) -> list[str]:
@@ -170,35 +271,166 @@ def build_node_snapshot(conn: sqlite3.Connection, project_id: str) -> dict[str, 
     return node_data
 
 
+#: Stable rendering order for `Finding.kind` -- unrecognized kinds (there
+#: shouldn't be any) sort last rather than erroring.
+FINDING_ORDER = [
+    "revisit_condition",
+    "dormant_unresolved",
+    "experiment_no_outcome",
+    "unresolved_sibling",
+    "contradicted_but_chosen",
+    "needs_review",
+    "merge_suggestion",
+]
+
+# Edge types that formally close out a dormant/rejected option or
+# hypothesis -- an incoming edge of one of these means *someone already
+# made the call*, even if the node's own status is still "dormant" rather
+# than "rejected". Absence of any of these is what makes a dormant node an
+# actual open loop instead of a resolved one.
+_CLOSING_EDGE_TYPES = {"REJECTED_BECAUSE", "CHOSEN_OVER", "SUPERSEDES"}
+
+# Edge types that connect a parent to a genuine branch/alternative child --
+# same "this represents a fork" notion BRANCH_NODE_TYPES captures for node
+# types, but for the edge that fans out to them.
+_FAN_OUT_EDGE_TYPES = {"EXPLORES", "ALTERNATIVE_TO"}
+
+
 @dataclass
-class OpenLoops:
-    """The machine's own record of "things possibly missed": parked
-    `revisit_condition` nodes (explicit REVISIT / PARK moments, prompt.py
-    taxonomy item 6) plus any `needs_review`/`merge_suggestions` an
-    extraction run declined to auto-apply (build plan section 15 -- these
-    are never applied automatically, so without surfacing them they sit
-    unseen in `extraction_runs.output_json` forever). There is no
-    resolved/dismissed tracking yet (build plan section 18, not built) --
-    everything here is unconditionally still open every time this is
-    collected. Shared data source for both `ascii_export.py`'s text
-    listing and `lab_notebook_export.py`'s panel -- one query, two
-    renderings."""
+class Finding:
+    """One "thing possibly missed" -- a uniform shape so a new check is a
+    pure addition to `collect_findings` with zero renderer changes, instead
+    of every check needing its own field threaded through both
+    `ascii_export.py` and `lab_notebook_export.py`. `kind` is a stable slug
+    (see FINDING_ORDER); `node_id` is the primary node the finding is
+    about, or None for a finding that isn't about one specific node
+    (`needs_review`, which is free text from an extraction run); `text` is
+    the fully-formatted human-readable line, built once here rather than
+    reassembled per renderer."""
 
-    revisit_conditions: list[sqlite3.Row] = field(default_factory=list)
-    needs_review: list[dict] = field(default_factory=list)  # {"description", "related_node_ids"}
-    merge_suggestions: list[dict] = field(default_factory=list)  # {"node_id_a", "node_id_b", "reason"}
-
-    def is_empty(self) -> bool:
-        return not (self.revisit_conditions or self.needs_review or self.merge_suggestions)
+    kind: str
+    node_id: str | None
+    text: str
 
 
-def collect_open_loops(conn: sqlite3.Connection, project_id: str, by_id: dict[str, sqlite3.Row]) -> OpenLoops:
-    loops = OpenLoops()
+def collect_findings(
+    conn: sqlite3.Connection,
+    project_id: str,
+    by_id: dict[str, sqlite3.Row],
+    node_timestamp: dict[str, str] | None = None,
+) -> list[Finding]:
+    """The machine's own record of "things possibly missed" -- shared data
+    source for both `ascii_export.py`'s text listing and
+    `lab_notebook_export.py`'s panel, one query per check, many renderings.
+    Every check here is derived from real graph shape (node type/status +
+    edge type), not a heuristic guess -- see docs/architecture.md for the
+    real KGW case each one was validated against. `node_timestamp`
+    (TreeResult.node_timestamp) is optional so callers that only have
+    `by_id` still work; when given, every node-anchored finding's text
+    carries a brief relative age ("21d ago") -- staleness is exactly the
+    signal that makes a finding worth acting on over just noting it."""
+    node_timestamp = node_timestamp or {}
+
+    def _tag(node_id: str) -> str:
+        age = format_relative_age(node_timestamp.get(node_id))
+        return f"  [{age}]" if age else ""
+
+    findings: list[Finding] = []
+
+    edge_rows = conn.execute(
+        "SELECT source_node_id, target_node_id, type FROM graph_edges WHERE project_id = ?",
+        (project_id,),
+    ).fetchall()
+    incoming: dict[str, list[sqlite3.Row]] = {}
+    outgoing: dict[str, list[sqlite3.Row]] = {}
+    for e in edge_rows:
+        incoming.setdefault(e["target_node_id"], []).append(e)
+        outgoing.setdefault(e["source_node_id"], []).append(e)
 
     for node in by_id.values():
-        if node["type"] == "revisit_condition" and node["status"] == "open":
-            loops.revisit_conditions.append(node)
+        node_id = node["id"]
 
+        if node["type"] == "revisit_condition" and node["status"] == "open":
+            findings.append(Finding("revisit_condition", node_id, f"{node_id}: {node['title']}{_tag(node_id)}"))
+
+        if node["type"] in ("option", "hypothesis") and node["status"] == "dormant":
+            closed = any(e["type"] in _CLOSING_EDGE_TYPES for e in incoming.get(node_id, []))
+            if not closed:
+                findings.append(
+                    Finding("dormant_unresolved", node_id, f"{node_id}: {node['title']}{_tag(node_id)}")
+                )
+
+        if node["type"] == "experiment" and node["status"] == "completed":
+            # PRODUCED's real direction convention (both instances in
+            # local/kgw-example/build.py, including the one deliberately
+            # NOT added because it was factually wrong) is outcome -source->
+            # experiment/option -target-, i.e. "this outcome came FROM this
+            # experiment" -- so an experiment's outcome is an *incoming*
+            # PRODUCED edge, not outgoing.
+            produced = any(e["type"] == "PRODUCED" for e in incoming.get(node_id, []))
+            if not produced:
+                findings.append(
+                    Finding("experiment_no_outcome", node_id, f"{node_id}: {node['title']}{_tag(node_id)}")
+                )
+
+        if node["type"] in BRANCH_NODE_TYPES and node["status"] in ("chosen", "exploring"):
+            contradicted_by = next(
+                (e["source_node_id"] for e in incoming.get(node_id, []) if e["type"] == "CONTRADICTS"), None
+            )
+            if contradicted_by is not None:
+                findings.append(
+                    Finding(
+                        "contradicted_but_chosen", node_id,
+                        f"{node_id}: {node['title']}  (contradicted by {contradicted_by}){_tag(node_id)}",
+                    )
+                )
+
+    findings.extend(_collect_unresolved_siblings(by_id, outgoing, node_timestamp))
+    findings.extend(_collect_needs_review_and_merge_suggestions(conn, project_id))
+
+    order_index = {kind: i for i, kind in enumerate(FINDING_ORDER)}
+    findings.sort(key=lambda f: order_index.get(f.kind, len(FINDING_ORDER)))
+    return findings
+
+
+def _collect_unresolved_siblings(
+    by_id: dict[str, sqlite3.Row], outgoing: dict[str, list[sqlite3.Row]], node_timestamp: dict[str, str]
+) -> list[Finding]:
+    """A parent fanned out (EXPLORES/ALTERNATIVE_TO) into >=2 branch
+    children, one of which is already resolved (chosen/rejected/completed/
+    superseded) -- this is the structural shape of "proceeded down one
+    branch". Restricted to siblings that are themselves `open` or
+    `dormant`: a sibling that's `exploring` has its own activity and isn't
+    a forgotten thread, it's a second thing currently being worked (flagged
+    only if it later goes stale, not just for existing in parallel)."""
+    findings: list[Finding] = []
+    for parent_id, edges in outgoing.items():
+        children = [
+            e["target_node_id"] for e in edges
+            if e["type"] in _FAN_OUT_EDGE_TYPES and e["target_node_id"] in by_id
+            and by_id[e["target_node_id"]]["type"] in BRANCH_NODE_TYPES
+        ]
+        if len(children) < 2:
+            continue
+        resolved = [cid for cid in children if by_id[cid]["status"] in FINISHED_STATUSES]
+        if not resolved:
+            continue
+        for cid in children:
+            status = by_id[cid]["status"]
+            if status in ("open", "dormant"):
+                age = format_relative_age(node_timestamp.get(cid))
+                age_tag = f"  [{age}]" if age else ""
+                findings.append(
+                    Finding(
+                        "unresolved_sibling", cid,
+                        f"{cid}: {by_id[cid]['title']}  "
+                        f"(sibling of {resolved[0]} under {parent_id}, still {status}){age_tag}",
+                    )
+                )
+    return findings
+
+
+def _collect_needs_review_and_merge_suggestions(conn: sqlite3.Connection, project_id: str) -> list[Finding]:
     runs = conn.execute(
         """
         SELECT DISTINCT er.output_json
@@ -216,6 +448,7 @@ def collect_open_loops(conn: sqlite3.Connection, project_id: str, by_id: dict[st
         (project_id,),
     ).fetchall()
 
+    findings: list[Finding] = []
     seen_review: set[str] = set()
     seen_merge: set[tuple[str, str]] = set()
     for row in runs:
@@ -228,16 +461,17 @@ def collect_open_loops(conn: sqlite3.Connection, project_id: str, by_id: dict[st
             if description in seen_review:
                 continue
             seen_review.add(description)
-            loops.needs_review.append(
-                {"description": description, "related_node_ids": nr.get("related_node_ids") or []}
-            )
+            related = nr.get("related_node_ids") or []
+            suffix = f"  (related: {', '.join(related)})" if related else ""
+            findings.append(Finding("needs_review", None, f"{description}{suffix}"))
         for ms in envelope.get("merge_suggestions", []):
-            key = tuple(sorted((ms.get("node_id_a", ""), ms.get("node_id_b", ""))))
+            a, b = ms.get("node_id_a", ""), ms.get("node_id_b", "")
+            key = tuple(sorted((a, b)))
             if key in seen_merge:
                 continue
             seen_merge.add(key)
-            loops.merge_suggestions.append(
-                {"node_id_a": ms.get("node_id_a"), "node_id_b": ms.get("node_id_b"), "reason": ms.get("reason")}
-            )
+            reason = ms.get("reason")
+            suffix = f": {reason}" if reason else ""
+            findings.append(Finding("merge_suggestion", None, f"{a} ~ {b}{suffix}"))
 
-    return loops
+    return findings

@@ -324,13 +324,18 @@ def map_(
     db: DbOpt = DEFAULT_DB,
 ):
     """Print the whole project's decision graph as a horizontal ASCII tree,
-    with the most-recently-touched node highlighted -- the fast, no-file
-    alternative to `graph export --html`/`--png`. Also prints a "You are
-    here: <root> -> ... -> <node>" breadcrumb above the tree, and an
-    "(open loops)" section below it (parked `revisit_condition` nodes plus
-    any `needs_review`/`merge_suggestions` an extraction run declined to
-    auto-apply) -- the two things worth seeing before scanning the whole
-    tree. Meant to be run from a slash command / skill; see
+    with the most-recently-touched node highlighted and a brief relative
+    age ("3d ago") next to every node -- the fast, no-file alternative to
+    `graph export --html`/`--png`. Also prints a "You are here: <root> ->
+    ... -> <node>" breadcrumb above the tree, and a "(open loops)" section
+    below it -- the "what did I missed" findings (parked open
+    `revisit_condition`s, a `dormant` option/hypothesis never formally
+    closed out, a `completed` experiment with no recorded outcome, an
+    unresolved sibling next to an already-resolved one, a `chosen`/
+    `exploring` node with a `CONTRADICTS` edge pointing at it, plus any
+    `needs_review`/`merge_suggestions` an extraction run declined to
+    auto-apply) -- the things worth seeing before scanning the whole tree.
+    Meant to be run from a slash command / skill; see
     integrations/README.md.
     """
     if color not in ("auto", "always", "never"):

@@ -23,7 +23,7 @@ import sqlite3
 
 from trace_mind.projection.graphviz_export import _STATUS_COLOR
 from trace_mind.projection.lattice_layout import Position, compute_positions, connector_waypoints, grid_row
-from trace_mind.projection.tree import build_forest, build_node_snapshot, collect_open_loops
+from trace_mind.projection.tree import build_forest, build_node_snapshot, collect_findings, format_relative_age
 
 BOX_WIDTH = 220
 BOX_HEIGHT = 100
@@ -42,7 +42,7 @@ def render_lab_notebook(conn: sqlite3.Connection, project_id: str) -> str:
 
     positions = compute_positions(tree)
     snapshot = build_node_snapshot(conn, project_id)
-    loops = collect_open_loops(conn, project_id, tree.by_id)
+    findings = collect_findings(conn, project_id, tree.by_id, tree.node_timestamp)
 
     max_col = max(p.col for p in positions.values())
     max_grid_row = max(grid_row(p.row) for p in positions.values())
@@ -50,7 +50,11 @@ def render_lab_notebook(conn: sqlite3.Connection, project_id: str) -> str:
     canvas_height = _grid_row_y(max_grid_row) + BOX_HEIGHT + PADDING * 2
 
     boxes = [
-        _render_box(tree.by_id[node_id], pos, snapshot.get(node_id, {}), is_here=(node_id == tree.you_are_here))
+        _render_box(
+            tree.by_id[node_id], pos, snapshot.get(node_id, {}),
+            age=format_relative_age(tree.node_timestamp.get(node_id)),
+            is_here=(node_id == tree.you_are_here),
+        )
         for node_id, pos in positions.items()
     ]
 
@@ -64,7 +68,7 @@ def render_lab_notebook(conn: sqlite3.Connection, project_id: str) -> str:
     html_out = html_out.replace("__CANVAS_HEIGHT__", str(canvas_height))
     html_out = html_out.replace("__CONNECTORS__", "\n".join(connectors))
     html_out = html_out.replace("__BOXES__", "\n".join(boxes))
-    html_out = html_out.replace("__OPEN_LOOPS__", _render_open_loops_panel(loops))
+    html_out = html_out.replace("__OPEN_LOOPS__", _render_open_loops_panel(findings))
     return html_out
 
 
@@ -84,12 +88,14 @@ def _box_xy(pos: Position) -> tuple[int, int]:
     return x, y
 
 
-def _render_box(node: sqlite3.Row, pos: Position, snapshot_entry: dict, *, is_here: bool) -> str:
+def _render_box(node: sqlite3.Row, pos: Position, snapshot_entry: dict, *, age: str | None, is_here: bool) -> str:
     """`snapshot_entry` (from `tree.build_node_snapshot`) is what makes this
     view carry "slightly more context than the ascii version": a hover
     tooltip with the node's summary and its first evidence excerpt, neither
     of which fit in a 220x100 card -- read-only, so a native `title`
-    attribute is enough, no JS needed."""
+    attribute is enough, no JS needed. `age` (tree.format_relative_age) is
+    folded into the same meta line as type/status rather than a new div, to
+    stay inside the fixed card height."""
     x, y = _box_xy(pos)
     color = _STATUS_COLOR.get(node["status"], _DEFAULT_STATUS_COLOR)
     here_class = " here" if is_here else ""
@@ -104,6 +110,10 @@ def _render_box(node: sqlite3.Row, pos: Position, snapshot_entry: dict, *, is_he
     tooltip = html_escape.escape(" — ".join(tooltip_parts)) if tooltip_parts else ""
     title_attr = f' title="{tooltip}"' if tooltip else ""
 
+    meta = f'{html_escape.escape(node["type"])} / {html_escape.escape(node["status"])}'
+    if age:
+        meta = f"{meta} · {html_escape.escape(age)}"
+
     return (
         f'<div class="card{here_class}" style="left:{x}px; top:{y}px; '
         f'width:{BOX_WIDTH}px; height:{BOX_HEIGHT}px; border-left-color:{color};" '
@@ -111,7 +121,7 @@ def _render_box(node: sqlite3.Row, pos: Position, snapshot_entry: dict, *, is_he
         f"{here_tag}"
         f'<div class="card-id">{html_escape.escape(node["id"])}</div>'
         f'<div class="card-title">{html_escape.escape(node["title"])}</div>'
-        f'<div class="card-meta">{html_escape.escape(node["type"])} / {html_escape.escape(node["status"])}</div>'
+        f'<div class="card-meta">{meta}</div>'
         f"</div>"
     )
 
@@ -136,30 +146,27 @@ def _render_connector(parent_pos: Position, child_pos: Position) -> str:
     return f'<path d="{d}" class="connector" marker-end="url(#arrow)" />'
 
 
-def _render_open_loops_panel(loops) -> str:
-    if loops.is_empty():
+def _render_open_loops_panel(findings: list) -> str:
+    """Generic over `Finding.kind` -- a new check in tree.py shows up here
+    with zero changes needed in this function, same as ascii_export's
+    equivalent listing."""
+    if not findings:
         return ""
 
-    items = []
-    for node in loops.revisit_conditions:
-        items.append(
-            f'<li><span class="loop-tag">revisit</span> '
-            f'<b>{html_escape.escape(node["id"])}</b>: {html_escape.escape(node["title"])}</li>'
-        )
-    for nr in loops.needs_review:
-        related = ", ".join(nr["related_node_ids"])
-        suffix = f' <span class="loop-related">(related: {html_escape.escape(related)})</span>' if related else ""
-        items.append(
-            f'<li><span class="loop-tag">needs review</span> '
-            f'{html_escape.escape(nr["description"])}{suffix}</li>'
-        )
-    for ms in loops.merge_suggestions:
-        reason = f": {html_escape.escape(ms['reason'])}" if ms["reason"] else ""
-        items.append(
-            f'<li><span class="loop-tag">merge?</span> '
-            f'<b>{html_escape.escape(ms["node_id_a"])}</b> ~ <b>{html_escape.escape(ms["node_id_b"])}</b>{reason}</li>'
-        )
-
+    tag_label = {
+        "revisit_condition": "revisit",
+        "dormant_unresolved": "dormant",
+        "experiment_no_outcome": "no outcome",
+        "unresolved_sibling": "unresolved",
+        "contradicted_but_chosen": "contradicted",
+        "needs_review": "needs review",
+        "merge_suggestion": "merge?",
+    }
+    items = [
+        f'<li><span class="loop-tag">{html_escape.escape(tag_label.get(f.kind, f.kind))}</span> '
+        f"{html_escape.escape(f.text)}</li>"
+        for f in findings
+    ]
     return f'<div id="open-loops"><h2>Open loops</h2><ul>{"".join(items)}</ul></div>'
 
 

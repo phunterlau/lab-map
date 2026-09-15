@@ -109,11 +109,51 @@ hooks are not wired yet ("hooks to codex for now").
   Claude Code/Codex/Pi wiring and the platform gap below.
 - `projection/tree.py` -- the goal-rooted BFS spanning-tree logic
   (`build_forest`), node-detail snapshot (`build_node_snapshot`), and
-  open-loops query (`collect_open_loops`) that `ascii_export.py`,
+  "what did I miss" findings (`collect_findings`) that `ascii_export.py`,
   `html_export.py`, and `lab_notebook_export.py` all share -- extracted so
   the three views can't silently diverge on what the graph's shape or a
   node's detail actually is; a difference between them now would be a real
   bug, not three independent reimplementations of the same queries.
+  - **`collect_findings`** returns a uniform `Finding(kind, node_id, text)`
+    list (replacing an earlier `OpenLoops` dataclass with one field per
+    check) specifically so a new check is a pure addition here, with zero
+    renderer changes -- both `ascii_export._render_open_loops` and
+    `lab_notebook_export._render_open_loops_panel` just loop over it and
+    group by `kind`. Every check is derived from real graph shape (node
+    type/status + edge type), validated against a real forensic pass over
+    `local/kgw-example` (see docs -- not repeated here since that data is
+    gitignored): open `revisit_condition`s (the original check); a
+    `dormant` option/hypothesis with no incoming closing edge
+    (`REJECTED_BECAUSE`/`CHOSEN_OVER`/`SUPERSEDES`) -- catches "set aside,
+    never formally closed", which a plain `dormant` status alone doesn't
+    distinguish from "properly rejected"; a `completed` experiment with no
+    incoming `PRODUCED` edge (real direction convention: outcome ->
+    experiment, confirmed against both instances in `local/kgw-example`'s
+    build script) -- restricted to `completed` so a `rejected`/dead-end
+    experiment, whose own status already records the result, isn't a false
+    positive; an unresolved sibling (`open`/`dormant`, explicitly NOT
+    `exploring`, a live parallel branch) under a parent whose
+    EXPLORES/ALTERNATIVE_TO fan-out has another, already-resolved child;
+    and a `CONTRADICTS` edge into a still-`chosen`/`exploring` node.
+    Deliberately NOT built: a new "resolved" node status or an inverse
+    `REVISIT_WHEN` edge -- the existing mechanism (flip status, or add a
+    `SUPERSEDES` edge) already works, going unused is a discipline gap, not
+    a schema gap.
+  - **YOU-ARE-HERE and each node's displayed age** are evidence-primary,
+    not `updated_at`-primary: `graph_nodes.updated_at` is only ever a
+    *write* time, and two rows touched microseconds apart by the same
+    script run or extraction transaction get different updated_at values
+    purely from write order, unrelated to real conversation recency (found
+    on the real KGW DB: R-KGW-SIGN and O-KGW-DP's updated_at values differ
+    by ~5ms from `build.py`'s Python loop order, which used to silently
+    point YOU ARE HERE at the wrong one). `normalized_events.timestamp`
+    (each node's latest evidence event, via `provenance`) is used instead
+    wherever a node has any evidence at all, falling back to `updated_at`
+    only for a structural node written with `allow_no_evidence`.
+    `format_relative_age` renders that timestamp as a brief tag ("21d
+    ago") next to every node in every view, on the YOU-ARE-HERE breadcrumb,
+    and on each node-anchored finding -- staleness is exactly the signal
+    that makes "what did I miss" actionable instead of just descriptive.
 - `projection/lattice_layout.py` + `projection/lab_notebook_export.py` --
   `trace-mind graph export --lab-notebook`: a third, read-only view --
   fixed-position "index card" boxes instead of Graphviz's reflowing

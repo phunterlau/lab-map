@@ -1,5 +1,5 @@
 import json
-import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -25,6 +25,24 @@ def evidence(tmp_path):
     ).fetchone()["id"]
     yield conn, project_id, ev
     conn.close()
+
+
+def _later_evidence_id(conn) -> str:
+    """A second, real, chronologically-LATER user_message event than the
+    `evidence` fixture's own `ev` -- for tests that need to show a node
+    genuinely became the most recent one (YOU-ARE-HERE is evidence-primary,
+    not write-order, so citing the SAME evidence twice never moves it)."""
+    return _evidence_id_at(conn, 1)
+
+
+def _evidence_id_at(conn, index: int) -> str:
+    """The `index`-th (0-based) real user_message event by byte_start --
+    the fixture transcript has three, so tests needing >=2 distinctly-timed
+    citations can pick `_evidence_id_at(conn, 0)`, `(conn, 1)`, etc."""
+    return conn.execute(
+        "SELECT id FROM normalized_events WHERE event_type = 'user_message' "
+        "ORDER BY byte_start LIMIT 1 OFFSET ?", (index,),
+    ).fetchone()["id"]
 
 
 def _tree_body(output: str) -> list[str]:
@@ -128,11 +146,11 @@ def test_exactly_one_you_are_here_on_most_recently_updated_node(evidence):
     conn, project_id, ev = evidence
     _build_canonical_graph(conn, project_id, ev)
 
-    # Touch O-0002 again so it's unambiguously the most recently updated.
-    time.sleep(0.01)
+    # Touch O-0002 again, citing genuinely later real evidence -- YOU ARE
+    # HERE is evidence-primary, so re-citing the same event wouldn't move it.
     graph_repo.add_node(
         conn, project_id, "O-0002", "option", "Graphiti",
-        status="dormant", evidence_event_ids=[ev],
+        status="dormant", evidence_event_ids=[_later_evidence_id(conn)],
     )
 
     output = ascii_export.render_ascii(conn, project_id, use_color=False)
@@ -152,9 +170,9 @@ def test_you_are_here_line_stays_styled_through_to_the_suffix(evidence):
     reset code before the final one that closes the whole line."""
     conn, project_id, ev = evidence
     _build_canonical_graph(conn, project_id, ev)
-    time.sleep(0.01)
     graph_repo.add_node(
-        conn, project_id, "O-0002", "option", "Graphiti", status="dormant", evidence_event_ids=[ev],
+        conn, project_id, "O-0002", "option", "Graphiti", status="dormant",
+        evidence_event_ids=[_later_evidence_id(conn)],
     )
 
     output = ascii_export.render_ascii(conn, project_id, use_color=True)
@@ -184,13 +202,13 @@ def test_id_tag_and_status_tag_get_independent_color_spans(evidence):
     graph_repo.add_node(
         conn, project_id, "O-0001", "option", "Rejected option", status="rejected", evidence_event_ids=[ev],
     )
-    # A second, later node so O-0001 is NOT "YOU ARE HERE" -- that line is
-    # deliberately built from the plain (uncolored) label (see the
+    # A second, genuinely-later node so O-0001 is NOT "YOU ARE HERE" -- that
+    # line is deliberately built from the plain (uncolored) label (see the
     # you-are-here regression test above), so it wouldn't exercise the
     # per-tag color spans this test is checking.
-    time.sleep(0.01)
     graph_repo.add_node(
-        conn, project_id, "O-0002", "option", "Later option", status="open", evidence_event_ids=[ev],
+        conn, project_id, "O-0002", "option", "Later option", status="open",
+        evidence_event_ids=[_later_evidence_id(conn)],
     )
 
     output = ascii_export.render_ascii(conn, project_id, use_color=True)
@@ -313,34 +331,44 @@ def test_deep_tree_indentation_is_structurally_correct(evidence):
 def test_breadcrumb_shows_path_from_root_to_you_are_here(evidence):
     conn, project_id, ev = evidence
     _build_canonical_graph(conn, project_id, ev)
-    time.sleep(0.01)
     graph_repo.add_node(
-        conn, project_id, "O-0002", "option", "Graphiti", status="dormant", evidence_event_ids=[ev],
+        conn, project_id, "O-0002", "option", "Graphiti", status="dormant",
+        evidence_event_ids=[_later_evidence_id(conn)],
     )
     output = ascii_export.render_ascii(conn, project_id, use_color=False)
-    assert output.splitlines()[0] == "You are here: Q-0001 → O-0002"
+    # Trailing content is an optional " (Nx ago)" relative-age tag (see
+    # test_breadcrumb_shows_relative_age_of_you_are_here) -- real evidence
+    # timestamps from the fixture file make its exact value time-dependent,
+    # so this test only pins down the path itself.
+    assert output.splitlines()[0].startswith("You are here: Q-0001 → O-0002")
 
 
 def test_breadcrumb_shows_multi_hop_path(evidence):
     conn, project_id, ev = evidence
     graph_repo.add_node(conn, project_id, "Q-0001", "goal", "Root", status="exploring", evidence_event_ids=[ev])
-    graph_repo.add_node(conn, project_id, "A", "option", "A", status="open", evidence_event_ids=[ev])
-    graph_repo.add_node(conn, project_id, "A1", "option", "A1", status="open", evidence_event_ids=[ev])
+    graph_repo.add_node(
+        conn, project_id, "A", "option", "A", status="open", evidence_event_ids=[_evidence_id_at(conn, 1)],
+    )
+    graph_repo.add_node(
+        conn, project_id, "A1", "option", "A1", status="open", evidence_event_ids=[_evidence_id_at(conn, 2)],
+    )
     graph_repo.add_edge(conn, project_id, "Q-0001", "A", "EXPLORES", evidence_event_ids=[ev])
     graph_repo.add_edge(conn, project_id, "A", "A1", "EXPLORES", evidence_event_ids=[ev])
 
     output = ascii_export.render_ascii(conn, project_id, use_color=False)
-    assert output.splitlines()[0] == "You are here: Q-0001 → A → A1"
+    assert output.splitlines()[0].startswith("You are here: Q-0001 → A → A1")
 
 
 def test_breadcrumb_handles_you_are_here_in_unlinked_component(evidence):
     conn, project_id, ev = evidence
     graph_repo.add_node(conn, project_id, "Q-0001", "goal", "Root", status="exploring", evidence_event_ids=[ev])
-    time.sleep(0.01)
-    graph_repo.add_node(conn, project_id, "O-9999", "option", "Stray", status="open", evidence_event_ids=[ev])
+    graph_repo.add_node(
+        conn, project_id, "O-9999", "option", "Stray", status="open",
+        evidence_event_ids=[_later_evidence_id(conn)],
+    )
 
     output = ascii_export.render_ascii(conn, project_id, use_color=False)
-    assert output.splitlines()[0] == "You are here: O-9999"
+    assert output.splitlines()[0].startswith("You are here: O-9999")
 
 
 def test_open_loops_shows_parked_revisit_condition(evidence):
@@ -353,12 +381,23 @@ def test_open_loops_shows_parked_revisit_condition(evidence):
 
     output = ascii_export.render_ascii(conn, project_id, use_color=False)
     assert ascii_export.OPEN_LOOPS_HEADING in output
-    assert "  [revisit_condition] R-0001: Revisit budget cap once k>10 lands" in output.splitlines()
+    # Real evidence timestamp makes an optional trailing "  [Nx ago]" age
+    # tag time-dependent (see test_open_loops_finding_shows_relative_age);
+    # this test only pins down the base line content.
+    assert any(
+        l.startswith("  [revisit_condition] R-0001: Revisit budget cap once k>10 lands")
+        for l in output.splitlines()
+    )
 
 
 def test_open_loops_excludes_non_open_revisit_condition(evidence):
+    """Deliberately NOT using _build_canonical_graph: its dormant options
+    are unrelated to what this test checks, but with dormant_unresolved
+    now a real finding, an unclosed dormant option in that shared fixture
+    would also trip the open-loops heading -- a minimal graph keeps this
+    test's assertion (no *other* findings leak in) meaningful."""
     conn, project_id, ev = evidence
-    _build_canonical_graph(conn, project_id, ev)
+    graph_repo.add_node(conn, project_id, "Q-0001", "goal", "Root", status="exploring", evidence_event_ids=[ev])
     graph_repo.add_node(
         conn, project_id, "R-0001", "revisit_condition", "Already resolved",
         status="superseded", evidence_event_ids=[ev],
@@ -427,3 +466,40 @@ def test_empty_project_renders_placeholder_message(evidence):
     conn, project_id, _ev = evidence
     output = ascii_export.render_ascii(conn, project_id, use_color=False)
     assert "no nodes" in output.lower()
+
+
+def test_node_line_shows_brief_relative_age(evidence):
+    conn, project_id, ev = evidence
+    graph_repo.add_node(conn, project_id, "Q-0001", "goal", "Root", status="exploring", evidence_event_ids=[ev])
+    stale = datetime.now(timezone.utc) - timedelta(days=3, hours=2)
+    conn.execute("UPDATE normalized_events SET timestamp = ? WHERE id = ?", (stale.isoformat(), ev))
+    conn.commit()
+
+    output = ascii_export.render_ascii(conn, project_id, use_color=False)
+    root_line = next(l for l in output.splitlines() if l.startswith("[Q-0001]"))
+    assert "[3d ago]" in root_line
+
+
+def test_breadcrumb_shows_relative_age_of_you_are_here(evidence):
+    conn, project_id, ev = evidence
+    graph_repo.add_node(conn, project_id, "Q-0001", "goal", "Root", status="exploring", evidence_event_ids=[ev])
+    stale = datetime.now(timezone.utc) - timedelta(hours=5)
+    conn.execute("UPDATE normalized_events SET timestamp = ? WHERE id = ?", (stale.isoformat(), ev))
+    conn.commit()
+
+    output = ascii_export.render_ascii(conn, project_id, use_color=False)
+    assert output.splitlines()[0] == "You are here: Q-0001  (5h ago)"
+
+
+def test_open_loops_finding_shows_relative_age(evidence):
+    conn, project_id, ev = evidence
+    graph_repo.add_node(
+        conn, project_id, "R-0001", "revisit_condition", "Parked", status="open", evidence_event_ids=[ev],
+    )
+    stale = datetime.now(timezone.utc) - timedelta(days=21)
+    conn.execute("UPDATE normalized_events SET timestamp = ? WHERE id = ?", (stale.isoformat(), ev))
+    conn.commit()
+
+    output = ascii_export.render_ascii(conn, project_id, use_color=False)
+    loop_line = next(l for l in output.splitlines() if "R-0001" in l and "[revisit_condition]" in l)
+    assert "[21d ago]" in loop_line

@@ -37,13 +37,6 @@ _ID_STYLE = "\x1b[1;36m"  # bold cyan, fixed regardless of status -- a stable
 # line and is easy to spot/select/copy-paste regardless of that node's status.
 _DIM = "\x1b[2m"
 
-# "Branch" children -- types that represent a genuine fork/alternative, for
-# the per-parent "(N branches, M finished)" summary. Support/detail types
-# (evidence, outcome, action, revisit_condition) attach to a branch but
-# aren't one themselves, so they're excluded from the count on purpose.
-_BRANCH_NODE_TYPES = {"option", "decision", "hypothesis", "experiment"}
-_FINISHED_STATUSES = {"chosen", "rejected", "completed", "superseded"}
-
 UNLINKED_HEADING = "(unlinked)"
 OPEN_LOOPS_HEADING = "(open loops)"
 
@@ -54,7 +47,10 @@ def render_ascii(conn: sqlite3.Connection, project_id: str, *, use_color: bool) 
         return "(no nodes in this project's graph yet)"
 
     lines: list[str] = [
-        _render_breadcrumb(t.by_id, t.forest, t.unlinked_forest, t.you_are_here, use_color=use_color), "",
+        _render_breadcrumb(
+            t.by_id, t.forest, t.unlinked_forest, t.you_are_here, t.node_timestamp, use_color=use_color,
+        ),
+        "",
     ]
     for root_id, parent_of in t.forest:
         _render_tree(lines, t, parent_of, root_id, "", you_are_here=t.you_are_here, use_color=use_color)
@@ -64,7 +60,7 @@ def render_ascii(conn: sqlite3.Connection, project_id: str, *, use_color: bool) 
         for root_id, parent_of in t.unlinked_forest:
             _render_tree(lines, t, parent_of, root_id, "", you_are_here=t.you_are_here, use_color=use_color)
 
-    open_loop_lines = _render_open_loops(conn, project_id, t.by_id)
+    open_loop_lines = _render_open_loops(conn, project_id, t.by_id, t.node_timestamp)
     if open_loop_lines:
         lines.append("")
         lines.append(OPEN_LOOPS_HEADING)
@@ -78,13 +74,18 @@ def _render_breadcrumb(
     forest: list[tuple[str, ParentOf]],
     unlinked_forest: list[tuple[str, ParentOf]],
     you_are_here: str,
+    node_timestamp: dict[str, str],
     *,
     use_color: bool,
 ) -> str:
     """'You are here: <root> -> ... -> <you_are_here>' -- the tree shows local
     siblings but not the route from the goal, which is what "where are we"
     actually means at a glance without scanning the whole tree for the
-    highlighted line."""
+    highlighted line. The trailing age ("2d ago") is a sanity check on the
+    YOU-ARE-HERE pick itself as much as it's information: if it reads as
+    implausibly old or new, that's a cue to double-check the pick rather
+    than trust it blindly (see tree._evidence_timestamps for how it's
+    resolved)."""
     path = [you_are_here]
     for _root_id, parent_of in (*forest, *unlinked_forest):
         if you_are_here in parent_of:
@@ -100,30 +101,24 @@ def _render_breadcrumb(
     else:
         crumb = "You are here: " + " → ".join(path)
 
+    age = tree_mod.format_relative_age(node_timestamp.get(you_are_here))
+    if age:
+        crumb = f"{crumb}  ({age})"
+
     if not use_color:
         return crumb
     return f"{_YOU_ARE_HERE_STYLE}{crumb}{_RESET}"
 
 
-def _render_open_loops(conn: sqlite3.Connection, project_id: str, by_id: dict[str, sqlite3.Row]) -> list[str]:
-    """Text formatting only -- the data comes from `tree.collect_open_loops`,
-    shared with `lab_notebook_export.py`'s open-loops panel."""
-    loops = tree_mod.collect_open_loops(conn, project_id, by_id)
-    lines: list[str] = []
-
-    for node in loops.revisit_conditions:
-        lines.append(f"  [revisit_condition] {node['id']}: {node['title']}")
-
-    for nr in loops.needs_review:
-        related = nr["related_node_ids"]
-        suffix = f"  (related: {', '.join(related)})" if related else ""
-        lines.append(f"  [needs_review] {nr['description']}{suffix}")
-
-    for ms in loops.merge_suggestions:
-        suffix = f": {ms['reason']}" if ms["reason"] else ""
-        lines.append(f"  [merge_suggestion] {ms['node_id_a']} ~ {ms['node_id_b']}{suffix}")
-
-    return lines
+def _render_open_loops(
+    conn: sqlite3.Connection, project_id: str, by_id: dict[str, sqlite3.Row], node_timestamp: dict[str, str]
+) -> list[str]:
+    """Text formatting only -- the data comes from `tree.collect_findings`,
+    shared with `lab_notebook_export.py`'s open-loops panel. Generic over
+    `Finding.kind`: a new check in tree.py shows up here with zero changes
+    needed in this function."""
+    findings = tree_mod.collect_findings(conn, project_id, by_id, node_timestamp)
+    return [f"  [{f.kind}] {f.text}" for f in findings]
 
 
 def _render_tree(
@@ -148,12 +143,14 @@ def _render_tree(
     # them is instant, free, and can't hallucinate -- an LLM call here would
     # be slower and less accurate than just counting, and `map` is meant to
     # be the fast, no-API-call view (see docs/architecture.md).
-    branch_children = [cid for cid in children if by_id[cid]["type"] in _BRANCH_NODE_TYPES]
+    branch_children = [cid for cid in children if by_id[cid]["type"] in tree_mod.BRANCH_NODE_TYPES]
     branch_summary = None
     if branch_children:
-        finished = sum(1 for cid in branch_children if by_id[cid]["status"] in _FINISHED_STATUSES)
+        finished = sum(1 for cid in branch_children if by_id[cid]["status"] in tree_mod.FINISHED_STATUSES)
         noun = "branch" if len(branch_children) == 1 else "branches"
         branch_summary = f"{len(branch_children)} {noun}, {finished} finished"
+
+    age = tree_mod.format_relative_age(t.node_timestamp.get(node_id))
 
     # `prefix` is this node's own ancestor continuation bars (NOT including
     # its own connector); `connector` is this node's own "├── "/"└── "/"".
@@ -171,12 +168,12 @@ def _render_tree(
     # partway through the line instead of covering it, a real bug only
     # visible in actual rendered output, not in plain-text-only tests.
     if is_here:
-        label = _format_node_label(node, edge, node_id, branch_summary, use_color=False)
+        label = _format_node_label(node, edge, node_id, branch_summary, age, use_color=False)
         line = f"{prefix}{connector}{label} ◀── YOU ARE HERE"
         if use_color:
             line = f"{_YOU_ARE_HERE_STYLE}{line}{_RESET}"
     else:
-        label = _format_node_label(node, edge, node_id, branch_summary, use_color=use_color)
+        label = _format_node_label(node, edge, node_id, branch_summary, age, use_color=use_color)
         line = f"{prefix}{connector}{label}"
     lines.append(line)
 
@@ -200,7 +197,13 @@ def _render_tree(
 
 
 def _format_node_label(
-    node: sqlite3.Row, edge: Edge | None, node_id: str, branch_summary: str | None, *, use_color: bool
+    node: sqlite3.Row,
+    edge: Edge | None,
+    node_id: str,
+    branch_summary: str | None,
+    age: str | None,
+    *,
+    use_color: bool,
 ) -> str:
     """Id and type/status are each their own bracketed `[...]` tag -- always,
     even with color off -- so either token has a clean boundary to
@@ -229,13 +232,15 @@ def _format_node_label(
             annotation = f"  (◀─{edge.type}─ from parent)"
 
     branch_tag = f"  {{{branch_summary}}}" if branch_summary else ""
+    age_tag = f"  [{age}]" if age else ""
 
     if not use_color:
-        return f"{id_tag} {type_tag} {node['title']}{annotation}{branch_tag}"
+        return f"{id_tag} {type_tag} {node['title']}{annotation}{branch_tag}{age_tag}"
 
     colored_id = f"{_ID_STYLE}{id_tag}{_RESET}"
     color = _STATUS_ANSI.get(node["status"])
     colored_type = f"\x1b[{color}m{type_tag}{_RESET}" if color else type_tag
     colored_annotation = f"{_DIM}{annotation}{_RESET}" if annotation else ""
     colored_branch = f"{_DIM}{branch_tag}{_RESET}" if branch_tag else ""
-    return f"{colored_id} {colored_type} {node['title']}{colored_annotation}{colored_branch}"
+    colored_age = f"{_DIM}{age_tag}{_RESET}" if age_tag else ""
+    return f"{colored_id} {colored_type} {node['title']}{colored_annotation}{colored_branch}{colored_age}"

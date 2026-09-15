@@ -1,4 +1,4 @@
-import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -26,14 +26,29 @@ def evidence(tmp_path):
     conn.close()
 
 
+def _later_evidence_id(conn) -> str:
+    """A second, real, chronologically-LATER user_message event than the
+    `evidence` fixture's own `ev` -- for tests that need to show a node
+    genuinely became the most recent one (YOU-ARE-HERE is evidence-primary,
+    not write-order, so citing the SAME evidence twice never moves it)."""
+    return conn.execute(
+        "SELECT id FROM normalized_events WHERE event_type = 'user_message' ORDER BY byte_start LIMIT 1 OFFSET 1"
+    ).fetchone()["id"]
+
+
 def _build_canonical_graph(conn, project_id, evidence_id):
     graph_repo.add_node(
         conn, project_id, "Q-0001", "goal", "Persistent research memory",
         status="exploring", evidence_event_ids=[evidence_id],
     )
     graph_repo.add_node(
+        # "rejected", not "dormant": a resolved sibling under Q-0001's
+        # EXPLORES fan-out alongside chosen O-0003 would otherwise trip the
+        # unresolved_sibling finding, even with a closing edge -- tests that
+        # need an actual open loop add their own node/edge on top of this
+        # baseline instead of relying on this shared fixture to have one.
         conn, project_id, "O-0002", "option", "Graphiti",
-        status="dormant", evidence_event_ids=[evidence_id],
+        status="rejected", evidence_event_ids=[evidence_id],
     )
     graph_repo.add_node(
         conn, project_id, "O-0003", "option", "Markdown + MCP",
@@ -68,10 +83,11 @@ def test_exactly_one_you_are_here_on_most_recently_updated_node(evidence):
     conn, project_id, ev = evidence
     _build_canonical_graph(conn, project_id, ev)
 
-    time.sleep(0.01)
+    # Touch O-0002 again, citing genuinely later real evidence -- YOU ARE
+    # HERE is evidence-primary, so re-citing the same event wouldn't move it.
     graph_repo.add_node(
         conn, project_id, "O-0002", "option", "Graphiti",
-        status="dormant", evidence_event_ids=[ev],
+        status="dormant", evidence_event_ids=[_later_evidence_id(conn)],
     )
 
     out = lab_notebook_export.render_lab_notebook(conn, project_id)
@@ -147,3 +163,33 @@ def test_empty_project_renders_placeholder_message(evidence):
     conn, project_id, _ev = evidence
     out = lab_notebook_export.render_lab_notebook(conn, project_id)
     assert "no nodes" in out.lower()
+
+
+def test_card_meta_shows_brief_relative_age(evidence):
+    conn, project_id, ev = evidence
+    graph_repo.add_node(conn, project_id, "Q-0001", "goal", "Root", status="exploring", evidence_event_ids=[ev])
+    stale = datetime.now(timezone.utc) - timedelta(days=3, hours=2)
+    conn.execute("UPDATE normalized_events SET timestamp = ? WHERE id = ?", (stale.isoformat(), ev))
+    conn.commit()
+
+    out = lab_notebook_export.render_lab_notebook(conn, project_id)
+    assert "3d ago" in out
+
+
+def test_open_loops_panel_surfaces_dormant_option_with_no_closing_edge(evidence):
+    """The real gap found in the KGW forensic pass: a dormant option that
+    was never formally closed out (no REJECTED_BECAUSE/CHOSEN_OVER/
+    SUPERSEDES) used to be invisible to this panel entirely -- only open
+    revisit_conditions were ever collected."""
+    conn, project_id, ev = evidence
+    graph_repo.add_node(conn, project_id, "Q-0001", "goal", "Root", status="exploring", evidence_event_ids=[ev])
+    graph_repo.add_node(
+        conn, project_id, "O-0002", "option", "Alternative, never closed out",
+        status="dormant", evidence_event_ids=[ev],
+    )
+    graph_repo.add_edge(conn, project_id, "O-0002", "Q-0001", "RELATED_TO", evidence_event_ids=[ev])
+
+    out = lab_notebook_export.render_lab_notebook(conn, project_id)
+    assert 'id="open-loops"' in out
+    assert "Alternative, never closed out" in out
+    assert "dormant" in out.split('id="open-loops"')[1]
