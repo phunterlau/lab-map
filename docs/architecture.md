@@ -107,6 +107,42 @@ hooks are not wired yet ("hooks to codex for now").
   not by the unit tests, which call `render_ascii()` directly and never
   touch Click's output layer at all. See `integrations/README.md` for the
   Claude Code/Codex/Pi wiring and the platform gap below.
+- `projection/tree.py` -- the goal-rooted BFS spanning-tree logic
+  (`build_forest`), node-detail snapshot (`build_node_snapshot`), and
+  open-loops query (`collect_open_loops`) that `ascii_export.py`,
+  `html_export.py`, and `lab_notebook_export.py` all share -- extracted so
+  the three views can't silently diverge on what the graph's shape or a
+  node's detail actually is; a difference between them now would be a real
+  bug, not three independent reimplementations of the same queries.
+- `projection/lattice_layout.py` + `projection/lab_notebook_export.py` --
+  `trace-mind graph export --lab-notebook`: a third, read-only view --
+  fixed-position "index card" boxes instead of Graphviz's reflowing
+  auto-layout, for when stable box positions across repeated exports
+  matter more than a maximally compact drawing. Position = **row** (BFS
+  depth) + **col** (DFS pre-order visit order, children in `created_at`
+  order). DFS pre-order gives every subtree a contiguous column range,
+  which is what makes two guarantees hold structurally, not just visually:
+  no two nodes ever share a cell, and no connector line can cross a third
+  node's box, given one reserved empty gutter row between every node row
+  (every connector is a 3-segment elbow confined to that gutter space,
+  touching a node row only at its own two endpoints --
+  `tests/test_lattice_layout.py::test_connector_waypoints_never_cross_a_node_row`
+  proves this directly, and a real-data check against the 17-node KGW
+  example confirmed zero box-box overlaps). Plain SVG + CSS, no JS
+  library -- confirmed via research that no lightweight graph library
+  (D3/Cytoscape/vis-network) reduces the actual work here, since none
+  ship a "lattice, no-reflow" layout and the position math is identical
+  either way. **Known v1 limitation:** positions are recomputed fresh on
+  every export, not persisted, so a normal `trace-mind extract` run that
+  attaches a new edge to an *existing* node (not just the newest leaf --
+  `update_nodes`/`create_edges` routinely do this) can shift columns for
+  nodes that didn't themselves change. The named Phase 2 fix, not built:
+  persist `(row, col)` per node on first layout
+  (`graph_node_positions(project_id, node_id, row, col)`), with new
+  insertions into an old branch needing fractional/rational column
+  indexing (the standard technique for stable ordering under arbitrary
+  insertion, e.g. Figma/Notion layer ordering) rather than dense integers,
+  so existing siblings never need renumbering.
 - `extraction/` -- the Milestone 5 LLM graph-diff extractor, per
   `docs/extraction_design.md`'s taxonomy. `prefilter.py` (build plan
   section 13: deterministic regex triggers, no classifier stage yet) gates

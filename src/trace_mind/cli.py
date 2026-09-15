@@ -20,7 +20,8 @@ from trace_mind.extraction import runner as extraction_runner
 from trace_mind.graph import repository as graph_repo
 from trace_mind.hooks import codex as codex_hooks
 from trace_mind.normalize.pipeline import ingest_session
-from trace_mind.projection import ascii_export, graphviz_export, html_export
+from trace_mind.projection import ascii_export, graphviz_export, html_export, lab_notebook_export
+from trace_mind.projection.tree import build_node_snapshot
 from trace_mind.storage.db import connect
 from trace_mind.transcripts.claude import ClaudeTranscriptAdapter
 from trace_mind.transcripts.codex import CodexTranscriptAdapter
@@ -272,11 +273,20 @@ def graph_export(
     out: Annotated[Path, typer.Option(help="Output file path")] = Path("research-map.dot"),
     png: Annotated[bool, typer.Option(help="Render PNG via the system `dot` binary instead of writing .dot")] = False,
     html: Annotated[bool, typer.Option(help="Render a self-contained interactive HTML viewer instead of .dot")] = False,
+    lab_notebook: Annotated[
+        bool, typer.Option("--lab-notebook", help="Render a self-contained, fixed-layout 'lab notebook' HTML view")
+    ] = False,
+    json_: Annotated[
+        bool, typer.Option("--json", help="Write the node-detail snapshot (type/title/status/edges/provenance) as JSON")
+    ] = False,
     db: DbOpt = DEFAULT_DB,
 ):
-    """Export the graph as Graphviz DOT, PNG (--png), or an interactive HTML viewer (--html)."""
-    if png and html:
-        typer.echo("pass only one of --png / --html", err=True)
+    """Export the graph as Graphviz DOT, PNG (--png), an interactive HTML
+    viewer (--html), a fixed-layout lab-notebook HTML view (--lab-notebook),
+    or a node-detail JSON snapshot (--json)."""
+    modes = [png, html, lab_notebook, json_]
+    if sum(modes) > 1:
+        typer.echo("pass only one of --png / --html / --lab-notebook / --json", err=True)
         raise typer.Exit(1)
 
     conn = connect(db)
@@ -286,6 +296,10 @@ def graph_export(
             graphviz_export.render_png(conn, project_id, out)
         elif html:
             out.write_text(html_export.render_html(conn, project_id))
+        elif lab_notebook:
+            out.write_text(lab_notebook_export.render_lab_notebook(conn, project_id))
+        elif json_:
+            out.write_text(json.dumps(build_node_snapshot(conn, project_id), indent=2))
         else:
             out.write_text(graphviz_export.render_dot(conn, project_id))
     finally:

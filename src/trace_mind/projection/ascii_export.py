@@ -2,22 +2,18 @@
 ASCII tree, for `trace-mind map` (see docs/architecture.md's slash-command
 integrations section).
 
-The graph is a DAG, not a strict tree (build plan section 24.4), and edge
-direction is not a consistent parent/child convention in practice -- real
-data in local/kgw-example/build.py has DERIVED_FROM pointing in both
-"newer explains older" and "older produced newer" senses depending on the
-pair. So this is deliberately a **connectivity-only BFS spanning tree**:
-adjacency treats every edge as undirected for the purpose of deciding
-who's whose child, and every rendered connector is annotated with the
-*real* edge type and its *real* direction relative to the parent, so the
-tree shape never misrepresents what the edge actually says.
+Tree shape comes from `projection.tree.build_forest` (connectivity-only BFS
+spanning tree, shared with every other projection); every rendered
+connector here is additionally annotated with the *real* edge type and its
+*real* direction relative to the parent, so the tree shape never
+misrepresents what the edge actually says.
 """
 from __future__ import annotations
 
-import json
 import sqlite3
-from collections import deque
-from dataclasses import dataclass
+
+from trace_mind.projection import tree as tree_mod
+from trace_mind.projection.tree import Edge, ParentOf, TreeResult
 
 # Mirrors graphviz_export.py's _STATUS_COLOR semantic grouping (chosen=green,
 # rejected/blocked=red, dormant/superseded=dim, completed=blue,
@@ -52,91 +48,23 @@ UNLINKED_HEADING = "(unlinked)"
 OPEN_LOOPS_HEADING = "(open loops)"
 
 
-@dataclass
-class _Edge:
-    source: str
-    target: str
-    type: str
-
-
 def render_ascii(conn: sqlite3.Connection, project_id: str, *, use_color: bool) -> str:
-    nodes = conn.execute(
-        "SELECT id, type, title, status, updated_at, created_at FROM graph_nodes "
-        "WHERE project_id = ? ORDER BY created_at",
-        (project_id,),
-    ).fetchall()
-    edge_rows = conn.execute(
-        "SELECT source_node_id, target_node_id, type FROM graph_edges WHERE project_id = ?",
-        (project_id,),
-    ).fetchall()
-
-    if not nodes:
+    t = tree_mod.build_forest(conn, project_id)
+    if not t.nodes:
         return "(no nodes in this project's graph yet)"
 
-    by_id = {n["id"]: n for n in nodes}
-    edges = [_Edge(e["source_node_id"], e["target_node_id"], e["type"]) for e in edge_rows]
+    lines: list[str] = [
+        _render_breadcrumb(t.by_id, t.forest, t.unlinked_forest, t.you_are_here, use_color=use_color), "",
+    ]
+    for root_id, parent_of in t.forest:
+        _render_tree(lines, t, parent_of, root_id, "", you_are_here=t.you_are_here, use_color=use_color)
 
-    adjacency: dict[str, list[_Edge]] = {n["id"]: [] for n in nodes}
-    for e in edges:
-        if e.source in adjacency:
-            adjacency[e.source].append(e)
-        if e.target in adjacency:
-            # Store a reversed view too so BFS can walk either direction;
-            # the *original* edge (source/target as declared) is kept so
-            # the annotation always shows the real direction, not a
-            # synthesized one.
-            adjacency[e.target].append(e)
-
-    you_are_here = max(nodes, key=lambda n: n["updated_at"])["id"]
-
-    visited: set[str] = set()
-    forest: list[tuple[str, dict[str, tuple[str, _Edge]]]] = []
-
-    def bfs_from(root_id: str) -> dict[str, tuple[str, _Edge]]:
-        """Returns child_id -> (parent_id, edge_used_to_reach_child)."""
-        parent_of: dict[str, tuple[str, _Edge]] = {}
-        queue: deque[str] = deque([root_id])
-        visited.add(root_id)
-        while queue:
-            current = queue.popleft()
-            for e in adjacency.get(current, []):
-                other = e.target if e.source == current else e.source
-                if other in visited or other not in by_id:
-                    continue
-                visited.add(other)
-                parent_of[other] = (current, e)
-                queue.append(other)
-        return parent_of
-
-    goal_roots = [n["id"] for n in nodes if n["type"] == "goal"]
-    if not goal_roots:
-        incoming = {e.target for e in edges}
-        goal_roots = [n["id"] for n in nodes if n["id"] not in incoming]
-    if not goal_roots:
-        goal_roots = [nodes[0]["id"]]
-
-    for root_id in goal_roots:
-        if root_id in visited:
-            continue
-        forest.append((root_id, bfs_from(root_id)))
-
-    unlinked_roots = [n["id"] for n in nodes if n["id"] not in visited]
-    unlinked_forest: list[tuple[str, dict[str, tuple[str, _Edge]]]] = []
-    for root_id in unlinked_roots:
-        if root_id in visited:
-            continue
-        unlinked_forest.append((root_id, bfs_from(root_id)))
-
-    lines: list[str] = [_render_breadcrumb(by_id, forest, unlinked_forest, you_are_here, use_color=use_color), ""]
-    for root_id, parent_of in forest:
-        _render_tree(lines, by_id, parent_of, root_id, "", you_are_here=you_are_here, use_color=use_color)
-
-    if unlinked_forest:
+    if t.unlinked_forest:
         lines.append(UNLINKED_HEADING)
-        for root_id, parent_of in unlinked_forest:
-            _render_tree(lines, by_id, parent_of, root_id, "", you_are_here=you_are_here, use_color=use_color)
+        for root_id, parent_of in t.unlinked_forest:
+            _render_tree(lines, t, parent_of, root_id, "", you_are_here=t.you_are_here, use_color=use_color)
 
-    open_loop_lines = _render_open_loops(conn, project_id, by_id)
+    open_loop_lines = _render_open_loops(conn, project_id, t.by_id)
     if open_loop_lines:
         lines.append("")
         lines.append(OPEN_LOOPS_HEADING)
@@ -147,8 +75,8 @@ def render_ascii(conn: sqlite3.Connection, project_id: str, *, use_color: bool) 
 
 def _render_breadcrumb(
     by_id: dict[str, sqlite3.Row],
-    forest: list[tuple[str, dict[str, tuple[str, _Edge]]]],
-    unlinked_forest: list[tuple[str, dict[str, tuple[str, _Edge]]]],
+    forest: list[tuple[str, ParentOf]],
+    unlinked_forest: list[tuple[str, ParentOf]],
     you_are_here: str,
     *,
     use_color: bool,
@@ -178,83 +106,43 @@ def _render_breadcrumb(
 
 
 def _render_open_loops(conn: sqlite3.Connection, project_id: str, by_id: dict[str, sqlite3.Row]) -> list[str]:
-    """Surfaces the machine's own record of "things possibly missed":
-    parked `revisit_condition` nodes (explicit REVISIT / PARK moments,
-    prompt.py taxonomy item 6) plus any `needs_review`/`merge_suggestions`
-    an extraction run declined to auto-apply (build plan section 15 -- these
-    are never applied automatically, so without this section they sit
-    unseen in `extraction_runs.output_json` forever). There is no
-    resolved/dismissed tracking yet (build plan section 18, not built) --
-    everything here is unconditionally still open every time `map` runs."""
+    """Text formatting only -- the data comes from `tree.collect_open_loops`,
+    shared with `lab_notebook_export.py`'s open-loops panel."""
+    loops = tree_mod.collect_open_loops(conn, project_id, by_id)
     lines: list[str] = []
 
-    for node in by_id.values():
-        if node["type"] == "revisit_condition" and node["status"] == "open":
-            lines.append(f"  [revisit_condition] {node['id']}: {node['title']}")
+    for node in loops.revisit_conditions:
+        lines.append(f"  [revisit_condition] {node['id']}: {node['title']}")
 
-    runs = conn.execute(
-        """
-        SELECT DISTINCT er.output_json
-        FROM extraction_runs er
-        WHERE er.status = 'applied' AND er.output_json IS NOT NULL
-          AND er.session_id IN (
-            SELECT DISTINCT ne.session_id
-            FROM provenance p
-            JOIN normalized_events ne ON ne.id = p.normalized_event_id
-            JOIN graph_nodes gn ON gn.id = p.object_id
-            WHERE p.object_type = 'node' AND gn.project_id = ?
-          )
-        ORDER BY er.output_json
-        """,
-        (project_id,),
-    ).fetchall()
+    for nr in loops.needs_review:
+        related = nr["related_node_ids"]
+        suffix = f"  (related: {', '.join(related)})" if related else ""
+        lines.append(f"  [needs_review] {nr['description']}{suffix}")
 
-    seen_review: set[str] = set()
-    seen_merge: set[tuple[str, str]] = set()
-    for row in runs:
-        try:
-            envelope = json.loads(row["output_json"])
-        except (TypeError, ValueError):
-            continue
-        for nr in envelope.get("needs_review", []):
-            description = nr.get("description", "")
-            if description in seen_review:
-                continue
-            seen_review.add(description)
-            related = nr.get("related_node_ids") or []
-            suffix = f"  (related: {', '.join(related)})" if related else ""
-            lines.append(f"  [needs_review] {description}{suffix}")
-        for ms in envelope.get("merge_suggestions", []):
-            key = tuple(sorted((ms.get("node_id_a", ""), ms.get("node_id_b", ""))))
-            if key in seen_merge:
-                continue
-            seen_merge.add(key)
-            reason = ms.get("reason")
-            suffix = f": {reason}" if reason else ""
-            lines.append(f"  [merge_suggestion] {ms.get('node_id_a')} ~ {ms.get('node_id_b')}{suffix}")
+    for ms in loops.merge_suggestions:
+        suffix = f": {ms['reason']}" if ms["reason"] else ""
+        lines.append(f"  [merge_suggestion] {ms['node_id_a']} ~ {ms['node_id_b']}{suffix}")
 
     return lines
 
 
 def _render_tree(
     lines: list[str],
-    by_id: dict[str, sqlite3.Row],
-    parent_of: dict[str, tuple[str, _Edge]],
+    t: TreeResult,
+    parent_of: ParentOf,
     node_id: str,
     prefix: str,
     *,
     you_are_here: str,
     use_color: bool,
     connector: str = "",
-    edge: _Edge | None = None,
+    edge: Edge | None = None,
 ) -> None:
+    by_id = t.by_id
     node = by_id[node_id]
     is_here = node_id == you_are_here
 
-    children = sorted(
-        (child_id for child_id, (parent_id, _e) in parent_of.items() if parent_id == node_id),
-        key=lambda cid: by_id[cid]["created_at"],
-    )
+    children = tree_mod.sorted_children(t, parent_of, node_id)
     # Deterministic, not LLM-estimated: branch count and finished count are
     # exact facts already in the graph (child type + status), so counting
     # them is instant, free, and can't hallucinate -- an LLM call here would
@@ -305,14 +193,14 @@ def _render_tree(
         is_last = i == len(children) - 1
         child_connector = "└── " if is_last else "├── "
         _render_tree(
-            lines, by_id, parent_of, child_id, children_base_prefix,
+            lines, t, parent_of, child_id, children_base_prefix,
             you_are_here=you_are_here, use_color=use_color,
             connector=child_connector, edge=parent_of[child_id][1],
         )
 
 
 def _format_node_label(
-    node: sqlite3.Row, edge: _Edge | None, node_id: str, branch_summary: str | None, *, use_color: bool
+    node: sqlite3.Row, edge: Edge | None, node_id: str, branch_summary: str | None, *, use_color: bool
 ) -> str:
     """Id and type/status are each their own bracketed `[...]` tag -- always,
     even with color off -- so either token has a clean boundary to

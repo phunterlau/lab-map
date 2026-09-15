@@ -2,56 +2,25 @@
 
 One file, no server, no CDN, no bundler -- open it directly with a
 file:// URL. The SVG comes from Graphviz (graphviz_export.render_svg);
-node details (summary/status/edges/provenance) are embedded as a JSON
-blob and rendered into a side panel by a small vanilla-JS block on click.
-Single-hop only (a node's own edges + provenance), matching what
-`trace-mind why <node>` already prints -- not a recursive ancestor walk.
+node details (summary/status/edges/provenance) come from
+`projection.tree.build_node_snapshot` (the same JSON shape `trace-mind
+graph export --json` writes standalone) and are embedded as a JSON blob,
+rendered into a side panel by a small vanilla-JS block on click.
 """
 from __future__ import annotations
 
 import json
 import sqlite3
 
-from trace_mind.graph import repository as graph_repo
 from trace_mind.projection.graphviz_export import _STATUS_COLOR, render_svg
+from trace_mind.projection.tree import build_node_snapshot
 
 
 def render_html(conn: sqlite3.Connection, project_id: str) -> str:
     svg = render_svg(conn, project_id)
     svg_inline = svg[svg.index("<svg") :]  # drop the XML/DOCTYPE preamble
 
-    node_data = {}
-    for n in graph_repo.list_nodes(conn, project_id):
-        node_id = n["id"]
-        edges = graph_repo.edges_touching(conn, node_id)
-        prov = graph_repo.provenance_for(conn, "node", node_id)
-
-        node_data[node_id] = {
-            "type": n["type"],
-            "title": n["title"],
-            "summary": n["summary"],
-            "status": n["status"],
-            "confidence": n["confidence"],
-            "edges": [
-                {
-                    "direction": "->" if e["source_node_id"] == node_id else "<-",
-                    "type": e["type"],
-                    "other": e["target_node_id"] if e["source_node_id"] == node_id else e["source_node_id"],
-                    "reason": e["reason"],
-                }
-                for e in edges
-            ],
-            "provenance": [
-                {
-                    "session_id": p["event_session_id"],
-                    "turn_id": p["turn_id"],
-                    "byte_start": p["byte_start"],
-                    "byte_end": p["byte_end"],
-                    "excerpt": (p["event_text"] or "")[:280],
-                }
-                for p in prov
-            ],
-        }
+    node_data = build_node_snapshot(conn, project_id)
 
     html = _TEMPLATE
     html = html.replace("__SVG__", svg_inline)
