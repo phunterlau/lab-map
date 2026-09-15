@@ -3,9 +3,29 @@
 All of these run `trace-mind map --color always` and show the result
 verbatim -- an ASCII, horizontal (`tree`-style) view of the current
 project's whole decision graph, most-recently-touched node highlighted as
-"YOU ARE HERE". None of these are installed automatically; copy the
-relevant file into your own config (Claude Code, Codex) or run `pi
-install` on the package directory (Pi) -- see each platform's entry below.
+"YOU ARE HERE". None of these are installed automatically by anything
+else (no hook, no postinstall) -- you run `install.sh` yourself, or copy
+files by hand.
+
+```
+./integrations/install.sh --claude-code        # this project, Claude Code
+./integrations/install.sh --claude-code-global # every project, Claude Code
+./integrations/install.sh --codex              # this project, Codex skill
+./integrations/install.sh --codex-global       # every project, Codex skill
+./integrations/install.sh --pi                 # this project, Pi extension
+./integrations/install.sh --pi-global          # every project, Pi extension
+./integrations/install.sh --all                # every *-global variant above
+./integrations/install.sh --help
+```
+
+Project-local flags (`--claude-code`, `--codex`, `--pi`) install relative
+to wherever you *run* the script from, not this repo -- so it's reusable
+against any project, not just trace-mind's own. `--pi`/`--pi-global` need
+`pi` on PATH and fail with a clear message if it's missing; every flag
+warns (but still installs) if `trace-mind` itself isn't on PATH yet, since
+that's a separate, later prerequisite from installing the command file.
+Equivalent manual copy-the-file steps are still below, in case you'd
+rather not run a script or want to see exactly what it does first.
 
 Prerequisite for all three: `trace-mind` must resolve on PATH as a real
 command (`cd <this repo> && uv tool install .`), and the target project
