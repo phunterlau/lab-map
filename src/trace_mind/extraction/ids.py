@@ -29,11 +29,33 @@ def allocate_node_id(conn: sqlite3.Connection, project_id: str, type_: str) -> s
         raise ValueError(f"no id prefix configured for node type {type_!r}")
 
     with conn:
+        # GLOBAL, not per-project: graph_nodes.id is a single global primary
+        # key (storage/db.py), not scoped by project_id -- so if two
+        # different projects' extraction runs each started counting from 1,
+        # they'd independently mint the same id (e.g. both "A-0001"), and
+        # add_node's upsert would silently let the second overwrite the
+        # first's content across an unrelated project. Confirmed via a real
+        # headless test: 7 different projects each minted "A-0001"
+        # independently, destroying 6 of 7 node-creation events with no
+        # error. Taking the max `next_seq` across every project's row for
+        # this prefix (rather than just this project's own row) guarantees
+        # every future mint, from any project, is globally unique -- the
+        # per-project row is still written so a project's own future mints
+        # keep advancing from wherever the global max last was.
         row = conn.execute(
-            "SELECT next_seq FROM graph_id_counters WHERE project_id = ? AND prefix = ?",
-            (project_id, prefix),
+            "SELECT MAX(next_seq) AS next_seq FROM graph_id_counters WHERE prefix = ?",
+            (prefix,),
         ).fetchone()
-        seq = row["next_seq"] if row else 1
+        seq = row["next_seq"] if row and row["next_seq"] is not None else 1
+        # The counter table only knows about ids IT allocated. A
+        # hand-authored id (`trace-mind node add A-0001`, or a build.py-style
+        # direct add_node call) never touches graph_id_counters, so the
+        # counter alone can still collide with a real, already-existing row.
+        # Bump past any id that's actually present in graph_nodes too.
+        while conn.execute(
+            "SELECT 1 FROM graph_nodes WHERE id = ?", (f"{prefix}-{seq:04d}",)
+        ).fetchone() is not None:
+            seq += 1
         conn.execute(
             """
             INSERT INTO graph_id_counters (project_id, prefix, next_seq) VALUES (?, ?, ?)

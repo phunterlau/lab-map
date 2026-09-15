@@ -150,3 +150,77 @@ def test_add_node_is_idempotent_upsert(db_with_events):
 
     all_nodes = graph_repo.list_nodes(db_with_events, project_id)
     assert len([n for n in all_nodes if n["id"] == "O-0001"]) == 1
+
+
+def test_add_node_rejects_id_already_used_by_a_different_project(db_with_events):
+    """Regression: found via a real headless test running extraction against
+    9 real Codex sessions sharing one DB -- graph_nodes.id is a single
+    global primary key, so two projects independently minting the same id
+    (e.g. both "A-0001") used to silently let the second overwrite the
+    first's content, with the row's project_id still pointing at whichever
+    project created it first. This must now fail loudly instead."""
+    project_a = graph_repo.ensure_project(db_with_events, "/example/project-a")
+    project_b = graph_repo.ensure_project(db_with_events, "/example/project-b")
+    evidence = _first_event_id(db_with_events, "user_message")
+
+    graph_repo.add_node(
+        db_with_events, project_a, "A-0001", "action", "Project A's action", evidence_event_ids=[evidence],
+    )
+    with pytest.raises(graph_repo.CrossProjectIdCollisionError):
+        graph_repo.add_node(
+            db_with_events, project_b, "A-0001", "action", "Project B's action", evidence_event_ids=[evidence],
+        )
+
+    # Project A's node must be untouched by the rejected write.
+    node = graph_repo.get_node(db_with_events, "A-0001")
+    assert node["project_id"] == project_a
+    assert node["title"] == "Project A's action"
+
+
+def test_add_node_same_project_same_id_still_upserts(db_with_events):
+    """The guard must only block a DIFFERENT project reusing an id --
+    updating your OWN node by id (the existing, intended upsert behavior)
+    must keep working."""
+    project_id = graph_repo.ensure_project(db_with_events, "/example/project")
+    evidence = _first_event_id(db_with_events, "user_message")
+
+    graph_repo.add_node(
+        db_with_events, project_id, "A-0001", "action", "v1", status="open", evidence_event_ids=[evidence],
+    )
+    graph_repo.add_node(
+        db_with_events, project_id, "A-0001", "action", "v1", status="completed", evidence_event_ids=[evidence],
+    )
+    node = graph_repo.get_node(db_with_events, "A-0001")
+    assert node["status"] == "completed"
+
+
+def test_add_edge_rejects_node_from_a_different_project(db_with_events):
+    """Same bug class as the node guard, confirmed by the same real headless
+    test: 25 edges in that run ended up referencing a node from a different
+    project than the edge's own declared project -- a direct downstream
+    consequence of node ids colliding across projects."""
+    project_a = graph_repo.ensure_project(db_with_events, "/example/project-a")
+    project_b = graph_repo.ensure_project(db_with_events, "/example/project-b")
+    evidence = _first_event_id(db_with_events, "user_message")
+
+    graph_repo.add_node(
+        db_with_events, project_a, "Q-0001", "goal", "Project A's goal", evidence_event_ids=[evidence],
+    )
+    graph_repo.add_node(
+        db_with_events, project_b, "O-0001", "option", "Project B's option", evidence_event_ids=[evidence],
+    )
+    with pytest.raises(graph_repo.CrossProjectIdCollisionError):
+        graph_repo.add_edge(
+            db_with_events, project_b, "Q-0001", "O-0001", "EXPLORES", evidence_event_ids=[evidence],
+        )
+
+
+    # Note: add_edge also guards its own deterministic edge id
+    # ("source|type|target") against collision with a different project's
+    # edge, same pattern as add_node -- but with the node-level guard above
+    # now in place, two projects can no longer legitimately hold the same
+    # node id in the first place, which makes that specific edge-id
+    # collision unreachable through normal validated writes. It stays in
+    # add_edge as defense-in-depth (e.g. against a future weakening of the
+    # node guard), just without an isolated test for a path that's no
+    # longer constructible without directly corrupting the DB by hand.

@@ -78,7 +78,11 @@ def apply_envelope(
                 summary=cn.summary, status=cn.status, confidence=cn.confidence,
                 evidence_event_ids=evidence_ids, extractor_version=extractor_version,
             )
-        except (graph_repo.InvalidOntologyError, graph_repo.MissingProvenanceError) as exc:
+        except (
+            graph_repo.InvalidOntologyError,
+            graph_repo.MissingProvenanceError,
+            graph_repo.CrossProjectIdCollisionError,
+        ) as exc:
             result.rejected.append(f"create_node {cn.temp_id}: {exc}")
             continue
         result.created_node_ids[cn.temp_id] = real_id
@@ -101,7 +105,11 @@ def apply_envelope(
                 confidence=un.confidence if un.confidence is not None else existing["confidence"],
                 evidence_event_ids=evidence_ids, extractor_version=extractor_version,
             )
-        except (graph_repo.InvalidOntologyError, graph_repo.MissingProvenanceError) as exc:
+        except (
+            graph_repo.InvalidOntologyError,
+            graph_repo.MissingProvenanceError,
+            graph_repo.CrossProjectIdCollisionError,
+        ) as exc:
             result.rejected.append(f"update_node {un.node_id}: {exc}")
             continue
         result.nodes_updated += 1
@@ -126,6 +134,7 @@ def apply_envelope(
             graph_repo.InvalidOntologyError,
             graph_repo.MissingProvenanceError,
             graph_repo.UnknownNodeError,
+            graph_repo.CrossProjectIdCollisionError,
         ) as exc:
             result.rejected.append(f"create_edge {ce.source}->{ce.target}: {exc}")
             continue
@@ -156,6 +165,7 @@ def apply_envelope(
             graph_repo.InvalidOntologyError,
             graph_repo.MissingProvenanceError,
             graph_repo.UnknownNodeError,
+            graph_repo.CrossProjectIdCollisionError,
         ) as exc:
             result.rejected.append(f"supersede {s.old_node_id}<-{s.new_node_id}: {exc}")
             continue

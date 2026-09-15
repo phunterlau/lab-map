@@ -30,6 +30,22 @@ class InvalidOntologyError(ValueError):
     here rather than silently producing an unrenderable graph later."""
 
 
+class CrossProjectIdCollisionError(ValueError):
+    """`graph_nodes.id` is a single global primary key, not scoped by
+    project_id -- so if two different projects ever mint or reference the
+    same node id, `add_node`'s upsert would otherwise silently overwrite
+    one project's node content with another's, while leaving the row's
+    project_id pointing at whichever project created it first (found via a
+    real headless test: node ids independently allocated per-project by
+    `extraction/ids.py` collided across unrelated projects sharing one DB,
+    destroying 6 of 7 colliding node-creation events with no error at all).
+    `extraction/ids.py::allocate_node_id` now allocates globally, not per
+    project, so this should be rare going forward; this is the loud,
+    catchable backstop for every other path that writes an id directly
+    (manual `node add`, `update_nodes`, `supersede`), not just extraction's
+    own allocator."""
+
+
 def ensure_project(conn: sqlite3.Connection, root_path: str, name: str | None = None) -> str:
     row = conn.execute("SELECT id FROM projects WHERE root_path = ?", (root_path,)).fetchone()
     if row:
@@ -69,6 +85,13 @@ def add_node(
             "only for structural/organizational nodes with no transcript source"
         )
 
+    existing = conn.execute("SELECT project_id FROM graph_nodes WHERE id = ?", (node_id,)).fetchone()
+    if existing is not None and existing["project_id"] != project_id:
+        raise CrossProjectIdCollisionError(
+            f"node id {node_id!r} already exists under project {existing['project_id']!r}, "
+            f"not {project_id!r} -- refusing to silently overwrite another project's node"
+        )
+
     now = _now()
     with conn:
         conn.execute(
@@ -106,8 +129,21 @@ def add_edge(
         raise InvalidOntologyError(f"unknown edge type {type_!r}; expected one of {sorted(EDGE_TYPES)}")
 
     for nid in (source_id, target_id):
-        if get_node(conn, nid) is None:
+        node = get_node(conn, nid)
+        if node is None:
             raise UnknownNodeError(f"edge references unknown node {nid!r}; create it first")
+        if node["project_id"] != project_id:
+            # Same bug class as add_node's guard: nothing previously stopped
+            # an edge from referencing a node that belongs to a DIFFERENT
+            # project (found via the same headless test -- 25 edges in one
+            # throwaway multi-project DB ended up pointing across project
+            # boundaries, a direct downstream consequence of node ids
+            # colliding across projects). Loud failure here beats a graph
+            # that silently mixes two unrelated projects' content.
+            raise CrossProjectIdCollisionError(
+                f"edge references node {nid!r} which belongs to project {node['project_id']!r}, "
+                f"not {project_id!r} -- refusing to create a cross-project edge"
+            )
 
     evidence_event_ids = evidence_event_ids or []
     if not evidence_event_ids and not allow_no_evidence:
@@ -116,6 +152,13 @@ def add_edge(
         )
 
     edge_id = f"{source_id}|{type_}|{target_id}"
+    existing = conn.execute("SELECT project_id FROM graph_edges WHERE id = ?", (edge_id,)).fetchone()
+    if existing is not None and existing["project_id"] != project_id:
+        raise CrossProjectIdCollisionError(
+            f"edge id {edge_id!r} already exists under project {existing['project_id']!r}, "
+            f"not {project_id!r} -- refusing to silently overwrite another project's edge"
+        )
+
     now = _now()
     with conn:
         conn.execute(

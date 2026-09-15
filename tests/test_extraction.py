@@ -82,6 +82,42 @@ def test_allocate_node_id_increments_per_type(tmp_path):
     conn.close()
 
 
+def test_allocate_node_id_is_globally_unique_across_projects(tmp_path):
+    """Regression: found via a real headless test running extraction against
+    9 real Codex sessions sharing one DB -- allocate_node_id used to count
+    per (project_id, prefix), so two different projects' first `action` node
+    both independently minted "A-0001", and add_node's upsert silently let
+    the second overwrite the first's content (destroying 6 of 7 colliding
+    node-creation events across unrelated sessions in that run, with no
+    error). The allocator must mint an id no other project has ever used,
+    not just one this project hasn't used before."""
+    conn = connect(tmp_path / "research.db")
+    project_a = graph_repo.ensure_project(conn, "/example/project-a")
+    project_b = graph_repo.ensure_project(conn, "/example/project-b")
+
+    id_a = ids.allocate_node_id(conn, project_a, "action")
+    id_b = ids.allocate_node_id(conn, project_b, "action")
+    assert id_a != id_b
+    assert {id_a, id_b} == {"A-0001", "A-0002"}
+    conn.close()
+
+
+def test_allocate_node_id_skips_a_hand_authored_id_already_in_use(tmp_path):
+    """The counter table only knows about ids IT allocated -- a
+    hand-authored id (`trace-mind node add A-0001`, or a build.py-style
+    direct add_node call) never touches graph_id_counters, so the counter
+    alone could still collide with a real, already-existing row. The
+    allocator must check graph_nodes itself, not just its own bookkeeping."""
+    conn = connect(tmp_path / "research.db")
+    project_a = graph_repo.ensure_project(conn, "/example/project-a")
+    project_b = graph_repo.ensure_project(conn, "/example/project-b")
+
+    graph_repo.add_node(conn, project_a, "A-0001", "action", "Hand-authored", allow_no_evidence=True)
+
+    minted = ids.allocate_node_id(conn, project_b, "action")
+    assert minted != "A-0001"
+
+
 # ---- window ----
 
 def test_window_input_hash_stable_and_independent_of_neighborhood(db_with_ingest):
